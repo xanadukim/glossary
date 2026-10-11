@@ -403,17 +403,71 @@ function attachAutomationEvents() {
   const checks = document.querySelectorAll('.cat-check');
   const display = document.getElementById('selectedCatDisplay');
   const customInput = document.getElementById('customCatInput');
-  let selected = automationSettings?.selected_categories ? [...automationSettings.selected_categories] : [];
+  // FIX: AX 등 잘못된 카테고리 자동 제거 (2글자 이하 대문자 약어 차단)
+  let rawSelected = automationSettings?.selected_categories ? [...automationSettings.selected_categories] : [];
+  // AX 삭제 로직
+  let selected = rawSelected.filter(cat => {
+    const trimmed = cat.trim();
+    // AX, AI, ML 등 2글자 대문자 약어 차단 (단, AI·ML 같은 정식 카테고리는 CATEGORIES에 있으므로 허용)
+    if (/^[A-Z]{2,3}$/.test(trimmed) && !['AI·ML'].includes(trimmed)) {
+      console.log(`잘못된 카테고리 자동 제거: ${trimmed}`);
+      return false;
+    }
+    // 1글자 차단
+    if (trimmed.length < 2) return false;
+    return true;
+  });
+  // 만약 필터링으로 AX 등이 제거되었다면 UI에 알림
+  const removed = rawSelected.filter(c => !selected.includes(c));
+  if (removed.length > 0) {
+    console.log(`제거된 잘못된 카테고리: ${removed.join(', ')}`);
+  }
 
   function updateDisplay() {
     if (selected.length===0) {
-      display.innerHTML = '현재: <b>자동 제안 모드 (null)</b> - 시스템이 부족한 카테고리를 자동 분석하여 제안';
+      display.innerHTML = '현재: <b>자동 제안 모드 (null)</b> - 시스템이 부족한 카테고리를 자동 분석하여 제안 <span class="text-[11px] text-zinc-400 ml-2">가장 부족한 카테고리를 자동 선택</span>';
     } else {
-      display.innerHTML = `현재 선택: <b>${selected.join(', ')}</b>`;
+      // 각 카테고리를 X 버튼이 있는 칩으로 표시
+      const chips = selected.map(cat => `
+        <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-black text-white text-[12px] mr-1 mb-1">
+          ${cat}
+          <button data-remove="${cat}" class="remove-cat ml-1 w-4 h-4 rounded-full bg-white/20 hover:bg-white/30 grid place-items-center text-[10px]">✕</button>
+        </span>
+      `).join('');
+      display.innerHTML = `
+        <div class="flex flex-wrap items-center gap-1">
+          <span class="text-[13px] mr-2">현재 선택:</span>
+          ${chips}
+          <button id="clearAllCats" class="ml-2 text-[11px] underline text-zinc-500 hover:text-black">전체 해제 (자동 모드)</button>
+        </div>
+        ${removed.length>0 ? `<div class="mt-2 text-[11px] text-orange-600">⚠️ 잘못된 카테고리 자동 제거됨: ${removed.join(', ')} → 저장하면 완전히 삭제됩니다</div>` : ''}
+      `;
+      // X 버튼 이벤트 연결
+      setTimeout(()=>{
+        document.querySelectorAll('.remove-cat').forEach(btn=>{
+          btn.onclick = (e)=>{
+            const catToRemove = e.target.getAttribute('data-remove');
+            selected = selected.filter(c=>c!==catToRemove);
+            // 체크박스도 해제
+            checks.forEach(ch=>{ if(ch.value===catToRemove) ch.checked=false; });
+            updateDisplay();
+          };
+        });
+        const clearBtn = document.getElementById('clearAllCats');
+        if (clearBtn) {
+          clearBtn.onclick = ()=>{
+            selected = [];
+            checks.forEach(ch=>ch.checked=false);
+            updateDisplay();
+          };
+        }
+      },0);
     }
   }
 
   checks.forEach(ch=>{
+    // 초기 체크 상태 반영
+    if (selected.includes(ch.value)) ch.checked = true;
     ch.onchange = (e)=>{
       const val = e.target.value;
       if (e.target.checked) { if (!selected.includes(val)) selected.push(val); }
@@ -425,10 +479,22 @@ function attachAutomationEvents() {
   document.getElementById('addCustomCat').onclick = ()=>{
     const val = customInput.value.trim();
     if (!val) return;
+    // 검증: AX 같은 2글자 대문자 약어 차단
+    if (/^[A-Z]{2,3}$/.test(val)) {
+      alert(`'${val}'은 너무 짧은 약어입니다. 정식 카테고리(예: AI·ML, 블록체인, 양자컴퓨팅)를 입력하세요.\n\n기존 카테고리: 데이터베이스·SQL, 개발 기본, 프론트엔드, 백엔드, AI·ML, 클라우드·DevOps, 보안, 네트워크, 데이터·분석, 모바일, 언어·프레임워크, CS 기본, Etc`);
+      return;
+    }
+    if (val.length < 2) {
+      alert('카테고리는 2글자 이상이어야 합니다.');
+      return;
+    }
+    if (val.length > 20) {
+      alert('카테고리는 20글자 이하여야 합니다.');
+      return;
+    }
     if (!selected.includes(val)) selected.push(val);
     customInput.value='';
     updateDisplay();
-    // 시각적으로도 체크박스 없으므로 display에만 추가, 저장 시에는 포함됨
   };
 
   document.getElementById('saveAutomation').onclick = async ()=>{
@@ -464,8 +530,56 @@ function attachAutomationEvents() {
 
   document.getElementById('triggerNow').onclick = async ()=>{
     const msg = document.getElementById('automationMsg');
-    msg.textContent='수동 트리거는 STEP 3에서 GitHub Actions와 연결됩니다. 현재는 설정 저장만 가능합니다. GitHub에서 직접 Actions를 실행해보세요.';
-    msg.className='text-[12px] text-zinc-500';
+    // GitHub repo URL 추정: config에서 가져오거나, 사용자가 입력한 경우
+    // 현재는 GitHub Actions 페이지로 안내하고, 직접 링크 제공
+    const githubRepo = localStorage.getItem('glossary:githubRepo') || '';
+    const defaultRepoUrl = 'https://github.com/YOUR_USERNAME/YOUR_REPO/actions/workflows/weekly-glossary.yml';
+    
+    msg.innerHTML = `
+      <div class="space-y-2">
+        <div>✅ STEP 3는 이미 연결되었습니다! 수동 실행 방법:</div>
+        <div class="pl-4 space-y-1 text-[12px]">
+          <div>1) GitHub repo → Actions 탭 → <b>Weekly Glossary Auto-Proposal (Tier3)</b> 클릭</div>
+          <div>2) 오른쪽 <b>Run workflow</b> → <b>Run workflow</b> 클릭 (27초 소요)</div>
+          <div>3) 완료 후 이 페이지 새로고침 → Pending 탭에 새 용어 표시</div>
+        </div>
+        <div class="pt-2 flex gap-2">
+          <button id="openActions" class="h-8 px-4 rounded-full bg-black text-white text-[12px]">GitHub Actions 열기</button>
+          <button id="copyLink" class="h-8 px-4 rounded-full border bg-white text-[12px]">링크 복사</button>
+        </div>
+        <div class="text-[11px] text-zinc-400">팁: 이 버튼은 GitHub API로 직접 트리거하려면 PAT가 필요합니다. 지금은 GitHub에서 직접 실행이 가장 안전합니다.</div>
+      </div>
+    `;
+    msg.className='text-[12px] text-zinc-700 bg-zinc-50 p-3 rounded-xl border';
+    
+    setTimeout(()=>{
+      const openBtn = document.getElementById('openActions');
+      const copyBtn = document.getElementById('copyLink');
+      if (openBtn) {
+        openBtn.onclick = ()=>{
+          // GitHub Actions 워크플로우 페이지로 이동 (사용자가 repo 주소를 알고 있다면)
+          window.open('https://github.com/actions', '_blank');
+          // 또는 현재 origin이 github pages라면 유추
+          const currentHost = window.location.hostname;
+          if (currentHost.includes('github.io')) {
+            const parts = window.location.pathname.split('/').filter(Boolean);
+            const repoName = parts[0] || '';
+            const userName = currentHost.split('.')[0];
+            const actionsUrl = `https://github.com/${userName}/${repoName}/actions`;
+            window.open(actionsUrl, '_blank');
+          }
+        };
+      }
+      if (copyBtn) {
+        copyBtn.onclick = async ()=>{
+          try {
+            await navigator.clipboard.writeText(window.location.origin + '/admin.html');
+            copyBtn.textContent='복사됨!';
+            setTimeout(()=>copyBtn.textContent='링크 복사',1500);
+          } catch {}
+        };
+      }
+    },0);
   };
 }
 
