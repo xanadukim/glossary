@@ -1,50 +1,100 @@
-export async function loadTerms() {
-  const res = await fetch('./terms.csv');
-  let text = await res.text();
-  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+// glossary/js/loader.js - Supabase 우선, CSV fallback
+import { supabase } from './supabase.js';
+import { CSV_PATH } from './config.js';
+
+function parseCSV(text) {
   const lines = text.trim().split('\n');
-  const header = lines[0].split(',').map(h=>h.trim());
-  const idx = { id: header.indexOf('id'), term: header.indexOf('term'), fullname: header.indexOf('fullname'), meaning: header.indexOf('meaning'), example: header.indexOf('example'), category: header.indexOf('category'), longDesc: header.indexOf('longDesc'), defaultFav: header.indexOf('defaultFav') };
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+  // longDesc, defaultFav 대소문자 대응
+  const idx = {};
+  headers.forEach((h,i) => { idx[h.toLowerCase()] = i; });
+  const get = (cols, ...names) => {
+    for (const n of names) {
+      const i = idx[n.toLowerCase()];
+      if (i !== undefined && cols[i] !== undefined) {
+        let v = cols[i].trim();
+        if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1,-1).replace(/""/g, '"');
+        return v;
+      }
+    }
+    return '';
+  };
+  // 간단 CSV 파서 (따옴표 처리)
+  const parseLine = (line) => {
+    const cols = [];
+    let cur = '', inQ = false;
+    for (let i=0;i<line.length;i++) {
+      const c = line[i];
+      if (c === '"' ) {
+        if (inQ && line[i+1]==='"') { cur+='"'; i++; }
+        else inQ = !inQ;
+      } else if (c===',' && !inQ) { cols.push(cur); cur=''; }
+      else cur+=c;
+    }
+    cols.push(cur);
+    return cols;
+  };
   const terms = [];
   for (let i=1;i<lines.length;i++) {
-    const line = lines[i];
-    if (!line.trim()) continue;
-    const row = parseCSVLine(line);
-    if (row.length < 6) continue;
-    const get = (key) => {
-      const pos = idx[key];
-      if (pos === -1 || pos >= row.length) return '';
-      const v = row[pos];
-      if (v === undefined || v === null) return '';
-      const t = v.trim();
-      if (t === '' || t.toUpperCase() === 'NULL') return '';
-      return t;
-    };
-    const t = { id: get('id'), term: get('term'), fullname: get('fullname'), meaning: get('meaning'), example: get('example'), category: get('category'), longDesc: get('longDesc'), defaultFav: get('defaultFav') };
-    if (t.category === '백엔드·아키텍처') t.category = '백엔드';
-    if (t.category === '배포·운영·품질') t.category = '배포·운영';
-    const favRaw = (t.defaultFav || '').toLowerCase();
-    t.isDefaultFav = ['true','1','yes','y','t'].includes(favRaw);
-    terms.push(t);
+    if (!lines[i].trim()) continue;
+    const cols = parseLine(lines[i]);
+    terms.push({
+      id: get(cols, 'id'),
+      term: get(cols, 'term'),
+      fullname: get(cols, 'fullname'),
+      meaning: get(cols, 'meaning'),
+      example: get(cols, 'example'),
+      category: get(cols, 'category'),
+      longDesc: get(cols, 'longdesc', 'longDesc'),
+      longdesc: get(cols, 'longdesc', 'longDesc'),
+      defaultFav: get(cols, 'defaultfav', 'defaultFav'),
+      defaultfav: get(cols, 'defaultfav', 'defaultFav')
+    });
   }
-  if (!terms.find(t=>t.term==='CRUD')) {
-    terms.unshift({ id: 'crud', term: 'CRUD', fullname: 'Create Read Update Delete', meaning: '데이터를 다루는 4가지 기본 연산', example: '데이터베이스 기본 사이클', category: '데이터베이스·SQL', longDesc: '', defaultFav: '', isCRUD: true, isDefaultFav: false });
-  }
-  const map = new Map();
-  terms.forEach(t=>{ if (!map.has(t.category)) map.set(t.category, []); map.get(t.category).push(t); });
-  const order = ["Git·GitHub","개발 기본","프로그래밍 개념","웹 공통·HTTP","프론트엔드","백엔드","데이터베이스·SQL","배포·운영","프로젝트·협업","AI 기초","AI 활용·개발","AI 정책·윤리"];
-  const categories = Array.from(map.entries()).map(([name, tlist])=>({ name, terms: tlist }));
-  categories.sort((a,b)=>{ const ia=order.indexOf(a.name), ib=order.indexOf(b.name); if(ia===-1&&ib===-1) return a.name.localeCompare(b.name); if(ia===-1) return 1; if(ib===-1) return -1; return ia-ib; });
-  return { categories, allTerms: terms };
+  return terms;
 }
-function parseCSVLine(line) {
-  const result=[]; let cur=''; let inQuotes=false;
-  for (let i=0;i<line.length;i++) {
-    const c=line[i];
-    if (c=='"') { if (inQuotes && line[i+1]=='"') { cur+='"'; i++; } else { inQuotes=!inQuotes; } }
-    else if (c===',' && !inQuotes) { result.push(cur); cur=''; }
-    else { cur+=c; }
-  }
-  result.push(cur);
-  return result.map(s=>s.trim());
+
+function normalizeTerm(t) {
+  // 소문자 통일 + camelCase 호환
+  return {
+    id: (t.id||'').trim(),
+    term: (t.term||'').trim(),
+    fullname: (t.fullname||'').trim(),
+    meaning: (t.meaning||'').trim(),
+    example: (t.example||'').trim(),
+    category: (t.category||'Etc').trim(),
+    longDesc: (t.longDesc || t.longdesc || '').trim(),
+    longdesc: (t.longDesc || t.longdesc || '').trim(),
+    defaultFav: (t.defaultFav || t.defaultfav || '').trim(),
+    defaultfav: (t.defaultFav || t.defaultfav || '').trim()
+  };
 }
+
+export async function loadTerms() {
+  let allTerms = [];
+  let source = 'supabase';
+  try {
+    const { data, error } = await supabase.from('terms').select('*').order('term', { ascending: true });
+    if (error) throw error;
+    if (!data || data.length===0) throw new Error('supabase empty');
+    allTerms = data.map(normalizeTerm);
+  } catch (e) {
+    console.warn('Supabase load failed, fallback to CSV:', e.message);
+    source = 'csv';
+    try {
+      const res = await fetch(CSV_PATH);
+      if (!res.ok) throw new Error('csv fetch failed');
+      const text = await res.text();
+      allTerms = parseCSV(text).map(normalizeTerm);
+    } catch (e2) {
+      console.error('CSV fallback failed:', e2);
+      allTerms = [];
+      source = 'empty';
+    }
+  }
+  const categories = [...new Set(allTerms.map(t=>t.category).filter(Boolean))].sort();
+  return { allTerms, categories, source };
+}
+
+export { parseCSV, normalizeTerm };
