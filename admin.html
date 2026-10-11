@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>관리자 - IT·AI 용어 사전</title>
+  <link rel="stylesheet" href="./css/app.css" />
+  <style>
+    :root { --bg:#fff; --surface:#fff; --surface-2:#f5f5f5; --surface-3:#eeeeee; --border:#e5e7eb; --border-2:#d1d5db; --text:#111; --text-2:#555; --text-3:#999; --shadow:0 4px 12px rgba(0,0,0,0.08); }
+    .dark { --bg:#0a0a0a; --surface:#141414; --surface-2:#1e1e1e; --surface-3:#2a2a2a; --border:#2a2a2a; --border-2:#3a3a3a; --text:#f5f5f5; --text-2:#aaa; --text-3:#777; }
+    body { background:var(--bg); color:var(--text); font-family:ui-sans-serif,system-ui,sans-serif; margin:0; min-height:100vh; }
+    .mono { font-family:ui-monospace,monospace; }
+  </style>
+  <script type="importmap">{"imports":{"xlsx":"https://esm.sh/xlsx@0.18.5"}}</script>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+import { checkPassword, isAuthed, setAuthed, logout } from './js/auth.js';
+import { exportAllTerms, exportFavorites, importFromExcel, generateCSVFromTerms } from './js/export.js';
+import { loadTerms } from './js/loader.js';
+
+let allTerms = [];
+let previewTerms = [];
+
+async function init() {
+  try {
+    const { allTerms: loaded } = await loadTerms();
+    allTerms = loaded;
+  } catch(e) { console.error(e); }
+  render();
+}
+
+function render() {
+  const root = document.getElementById('root');
+  if(!isAuthed()) {
+    root.innerHTML = `
+      <div class="min-h-screen grid place-items-center px-4">
+        <div class="w-full max-w-[380px] rounded-[24px] border bg-[var(--surface)] p-8 shadow">
+          <div class="h-10 w-10 rounded-xl bg-black text-white dark:bg-white dark:text-black grid place-items-center font-bold mb-4">IT</div>
+          <h1 class="text-[20px] font-extrabold">관리자 로그인</h1>
+          <p class="text-[13px] text-[var(--text-2)] mt-1">비밀번호를 입력하면 엑셀 내보내기/가져오기가 가능합니다.</p>
+          <div class="mt-6 space-y-3">
+            <input id="pw" type="password" placeholder="비밀번호" class="w-full h-11 px-4 rounded-full border bg-[var(--surface-2)] outline-none" />
+            <button id="loginBtn" class="w-full h-11 rounded-full bg-black text-white dark:bg-white dark:text-black font-semibold">로그인</button>
+            <a href="./index.html" class="block text-center text-[12px] text-[var(--text-3)] underline">← 대시보드로 돌아가기</a>
+            <div id="loginMsg" class="text-[12px] text-red-500"></div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.getElementById('loginBtn').onclick = async () => {
+      const pw = document.getElementById('pw').value;
+      const ok = await checkPassword(pw);
+      if(ok){ setAuthed(); render(); } else { document.getElementById('loginMsg').textContent = '비밀번호가 틀렸습니다.'; }
+    };
+    document.getElementById('pw').addEventListener('keydown', (e)=>{ if(e.key==='Enter') document.getElementById('loginBtn').click(); });
+    return;
+  }
+
+  const favCount = (()=>{ try { return JSON.parse(localStorage.getItem('it-ai-glossary:favorites:v1')||'[]').length; } catch { return 0; } })();
+
+  root.innerHTML = `
+    <header class="sticky top-0 z-20 border-b bg-[var(--surface)]/80 backdrop-blur-xl">
+      <div class="mx-auto max-w-[1200px] px-6 h-[64px] flex items-center justify-between">
+        <div class="flex items-center gap-3"><div class="h-9 w-9 rounded-xl bg-black text-white grid place-items-center font-bold">IT</div><div><div class="font-extrabold">관리자 페이지</div><div class="text-[11px] text-[var(--text-2)]">Excel 내보내기 / 가져오기</div></div></div>
+        <div class="flex gap-2"><a href="./index.html" class="h-9 px-4 rounded-full border bg-[var(--surface-2)] grid place-items-center text-[13px]">대시보드</a><button id="logoutBtn" class="h-9 px-4 rounded-full border bg-[var(--surface-2)] text-[13px]">로그아웃</button></div>
+      </div>
+    </header>
+    <main class="mx-auto max-w-[1200px] px-6 py-8 space-y-6">
+      <div class="rounded-[20px] border bg-[var(--surface)] p-6">
+        <h2 class="font-bold text-[16px]">전체 용어 엑셀 내보내기</h2>
+        <p class="text-[13px] text-[var(--text-2)] mt-1">현재 terms.csv ${allTerms.length}개 전체를 .xlsx로 다운로드합니다. longDesc, defaultFav 포함.</p>
+        <button id="exportAllBtn" class="mt-4 h-10 px-5 rounded-full bg-black text-white dark:bg-white dark:text-black font-semibold">전체 ${allTerms.length}개 내보내기</button>
+      </div>
+      <div class="rounded-[20px] border bg-[var(--surface)] p-6">
+        <h2 class="font-bold text-[16px]">즐겨찾기 엑셀 내보내기</h2>
+        <p class="text-[13px] text-[var(--text-2)] mt-1">브라우저에 저장된 즐겨찾기 ${favCount}개를 .xlsx로 다운로드합니다. (가져오기 불필요)</p>
+        <button id="exportFavBtn" class="mt-4 h-10 px-5 rounded-full ${favCount===0?'bg-[var(--surface-2)] text-[var(--text-3)] border':'bg-black text-white dark:bg-white dark:text-black'} font-semibold" ${favCount===0?'disabled':''}>즐겨찾기 ${favCount}개 내보내기</button>
+      </div>
+      <div class="rounded-[20px] border bg-[var(--surface)] p-6">
+        <h2 class="font-bold text-[16px]">엑셀파일 가져오기</h2>
+        <p class="text-[13px] text-[var(--text-2)] mt-1">엑셀(.xlsx) 파일을 업로드하면 terms.csv로 변환하여 미리보기 후 다운로드합니다. 서버에 직접 저장되지 않으므로, 다운로드한 csv를 it-ai-split/terms.csv로 교체하세요.</p>
+        <div id="dropZone" class="mt-4 rounded-[16px] border-dashed border-2 p-8 text-center bg-[var(--surface-2)]/50 hover:bg-[var(--surface-2)] cursor-pointer">
+          <div class="text-[14px] font-semibold">엑셀 파일을 드래그하거나 클릭하여 선택</div>
+          <div class="text-[12px] text-[var(--text-3)] mt-1">필수 컬럼: term, meaning, category (id, fullname, example, longDesc, defaultFav는 선택)</div>
+          <input id="fileInput" type="file" accept=".xlsx,.xls" class="hidden" />
+        </div>
+        <div id="importPreview" class="mt-4 hidden">
+          <div class="flex justify-between items-center"><h3 class="font-bold text-[14px]">미리보기</h3><span id="importStats" class="text-[12px] text-[var(--text-2)]"></span></div>
+          <div class="mt-2 overflow-auto max-h-[300px] border rounded-[12px]"><table id="previewTable" class="w-full text-[12px]"><thead class="bg-[var(--surface-2)] sticky top-0"><tr><th class="p-2 text-left">term</th><th class="p-2 text-left">meaning</th><th class="p-2 text-left">category</th><th class="p-2 text-left">longDesc</th></tr></thead><tbody></tbody></table></div>
+          <div class="mt-3 flex gap-2">
+            <button id="downloadCsvBtn" class="h-10 px-5 rounded-full bg-black text-white dark:bg-white dark:text-black font-semibold">CSV로 다운로드 (terms.csv 교체용)</button>
+            <button id="downloadXlsxBtn" class="h-10 px-5 rounded-full border bg-[var(--surface)]">정제된 엑셀로 다시 다운로드</button>
+          </div>
+        </div>
+        <div id="importMsg" class="mt-3 text-[12px] text-red-500"></div>
+      </div>
+    </main>
+    <footer class="mx-auto max-w-[1200px] px-6 py-8 text-[11px] text-[var(--text-3)]">© Admin · 비번: ai1283 · 세션스토리지에만 저장</footer>
+  `;
+
+  document.getElementById('logoutBtn').onclick = ()=>{ logout(); render(); };
+  document.getElementById('exportAllBtn').onclick = ()=>{ try { exportAllTerms(allTerms); } catch(e){ alert(e.message); } };
+  document.getElementById('exportFavBtn').onclick = ()=>{ 
+    try { 
+      const favs = new Set(JSON.parse(localStorage.getItem('it-ai-glossary:favorites:v1')||'[]'));
+      exportFavorites(allTerms, favs);
+    } catch(e){ alert(e.message); }
+  };
+
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  dropZone.onclick = ()=> fileInput.click();
+  dropZone.ondragover = (e)=>{ e.preventDefault(); dropZone.classList.add('bg-[var(--surface-3)]'); };
+  dropZone.ondragleave = ()=>{ dropZone.classList.remove('bg-[var(--surface-3)]'); };
+  dropZone.ondrop = (e)=>{ e.preventDefault(); dropZone.classList.remove('bg-[var(--surface-3)]'); if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); };
+  fileInput.onchange = ()=>{ if(fileInput.files[0]) handleFile(fileInput.files[0]); };
+
+  async function handleFile(file) {
+    const msgEl = document.getElementById('importMsg');
+    msgEl.textContent = '';
+    try {
+      const terms = await importFromExcel(file);
+      previewTerms = terms;
+      const existingTerms = new Set(allTerms.map(t=>t.term.toLowerCase()));
+      let newCount = 0, updateCount = 0;
+      terms.forEach(t=>{ if(existingTerms.has(t.term.toLowerCase())) updateCount++; else newCount++; });
+      document.getElementById('importStats').textContent = `총 ${terms.length}개 (신규 ${newCount} / 업데이트 ${updateCount})`;
+      const tbody = document.querySelector('#previewTable tbody');
+      tbody.innerHTML = terms.slice(0,20).map(t=>`<tr class="border-t"><td class="p-2 font-bold">${t.term}</td><td class="p-2">${t.meaning.slice(0,40)}</td><td class="p-2">${t.category}</td><td class="p-2">${(t.longDesc||'').slice(0,40)}</td></tr>`).join('');
+      document.getElementById('importPreview').classList.remove('hidden');
+    } catch(e) {
+      msgEl.textContent = e.message;
+    }
+  }
+
+  document.getElementById('downloadCsvBtn')?.addEventListener('click', ()=>{
+    if(previewTerms.length===0) return;
+    const csv = generateCSVFromTerms(previewTerms);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'terms.csv'; a.click();
+    URL.revokeObjectURL(url);
+  });
+  document.getElementById('downloadXlsxBtn')?.addEventListener('click', ()=>{
+    if(previewTerms.length===0) return;
+    try { exportAllTerms(previewTerms); } catch(e){ alert(e.message); }
+  });
+}
+
+init();
+</script>
+</body>
+</html>
