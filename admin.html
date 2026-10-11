@@ -70,17 +70,17 @@ function render() {
     <main class="mx-auto max-w-[1200px] px-6 py-8 space-y-6">
       <div class="rounded-[20px] border bg-[var(--surface)] p-6">
         <h2 class="font-bold text-[16px]">전체 용어 엑셀 내보내기</h2>
-        <p class="text-[13px] text-[var(--text-2)] mt-1">현재 terms.csv ${allTerms.length}개 전체를 .xlsx로 다운로드합니다. longDesc, defaultFav 포함.</p>
-        <button id="exportAllBtn" class="mt-4 h-10 px-5 rounded-full bg-black text-white dark:bg-white dark:text-black font-semibold">전체 ${allTerms.length}개 내보내기</button>
+        <p class="text-[13px] text-[var(--text-2)] mt-1">현재 terms.csv \${allTerms.length}개 전체를 .xlsx로 다운로드합니다. longDesc, defaultFav 포함.</p>
+        <button id="exportAllBtn" class="mt-4 h-10 px-5 rounded-full bg-black text-white dark:bg-white dark:text-black font-semibold">전체 \${allTerms.length}개 내보내기</button>
       </div>
       <div class="rounded-[20px] border bg-[var(--surface)] p-6">
         <h2 class="font-bold text-[16px]">즐겨찾기 엑셀 내보내기</h2>
-        <p class="text-[13px] text-[var(--text-2)] mt-1">브라우저에 저장된 즐겨찾기 ${favCount}개를 .xlsx로 다운로드합니다. (가져오기 불필요)</p>
-        <button id="exportFavBtn" class="mt-4 h-10 px-5 rounded-full ${favCount===0?'bg-[var(--surface-2)] text-[var(--text-3)] border':'bg-black text-white dark:bg-white dark:text-black'} font-semibold" ${favCount===0?'disabled':''}>즐겨찾기 ${favCount}개 내보내기</button>
+        <p class="text-[13px] text-[var(--text-2)] mt-1">브라우저에 저장된 즐겨찾기 \${favCount}개를 .xlsx로 다운로드합니다. (가져오기 불필요)</p>
+        <button id="exportFavBtn" class="mt-4 h-10 px-5 rounded-full \${favCount===0?'bg-[var(--surface-2)] text-[var(--text-3)] border':'bg-black text-white dark:bg-white dark:text-black'} font-semibold" \${favCount===0?'disabled':''}>즐겨찾기 \${favCount}개 내보내기</button>
       </div>
       <div class="rounded-[20px] border bg-[var(--surface)] p-6">
         <h2 class="font-bold text-[16px]">엑셀파일 가져오기</h2>
-        <p class="text-[13px] text-[var(--text-2)] mt-1">엑셀(.xlsx) 파일을 업로드하면 terms.csv로 변환하여 미리보기 후 다운로드합니다. 서버에 직접 저장되지 않으므로, 다운로드한 csv를 it-ai-split/terms.csv로 교체하세요.</p>
+        <p class="text-[13px] text-[var(--text-2)] mt-1">엑셀(.xlsx) 파일을 업로드하면 terms.csv로 변환하여 미리보기 후 다운로드합니다. 서버에 직접 저장되지 않으므로, 다운로드한 csv를 terms.csv로 교체하세요.</p>
         <div id="dropZone" class="mt-4 rounded-[16px] border-dashed border-2 p-8 text-center bg-[var(--surface-2)]/50 hover:bg-[var(--surface-2)] cursor-pointer">
           <div class="text-[14px] font-semibold">엑셀 파일을 드래그하거나 클릭하여 선택</div>
           <div class="text-[12px] text-[var(--text-3)] mt-1">필수 컬럼: term, meaning, category (id, fullname, example, longDesc, defaultFav는 선택)</div>
@@ -97,7 +97,7 @@ function render() {
         <div id="importMsg" class="mt-3 text-[12px] text-red-500"></div>
       </div>
     </main>
-    <footer class="mx-auto max-w-[1200px] px-6 py-8 text-[11px] text-[var(--text-3)]">© Admin · 비번: ai1283 · 세션스토리지에만 저장</footer>
+    <footer class="mx-auto max-w-[1200px] px-6 py-8 text-[11px] text-[var(--text-3)]">© Admin</footer>
   `;
 
   document.getElementById('logoutBtn').onclick = ()=>{ logout(); render(); };
