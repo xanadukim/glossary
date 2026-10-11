@@ -1,16 +1,13 @@
-// scripts/generate-pending.js - Tier3 주 1회 자동 제안 + 2중 출처 검증 (Node 22 대응 + ws polyfill)
+// scripts/generate-pending.js - Tier3 v3 (defaultFav 제거, terms_pending 스키마 호환)
 const { createClient } = require('@supabase/supabase-js');
 
-// Node 20 이하에서 WebSocket polyfill 필요 - Supabase Realtime을 위해 ws 사용
 try {
   const ws = require('ws');
   global.WebSocket = ws;
 } catch (e) {
-  // Node 22+에서는 native WebSocket이 있으므로 무시
   console.log('ws polyfill not needed (Node 22+ native WebSocket)');
 }
 
-// 후보 풀 - 카테고리별 30개씩, 기존 445개와 겹치지 않도록 최신 기술 위주
 const CANDIDATE_POOL = {
   '프론트엔드': ['Bun','Vite','Astro','SolidJS','Qwik','SvelteKit','Remix','Turbopack','Biome','ESLint v9','StyleX','Vanilla Extract','Panda CSS','TanStack Query','Zustand','Jotai','Valtio','React Server Components','Next.js 14','Nuxt 3','HTMX','Alpine.js','Lit','Web Components','View Transitions API','Container Queries','Cascade Layers','Subgrid',':has()','NPM Workspaces'],
   '백엔드': ['Bun','Deno','FastAPI','NestJS','Hono','tRPC','GraphQL Yoga','Prisma 5','Drizzle ORM','Supabase Realtime','PlanetScale','Turso','Upstash','Neon','Bun Shell','Effect TS','Elysia','Fastify','Koa','Strapi v4','PocketBase','NATS','Temporal','BullMQ','Pino','OpenTelemetry','Drizzle Kit','Kysely','Valibot','Zod 4'],
@@ -107,7 +104,6 @@ async function main() {
     console.error('SUPABASE_URL과 SUPABASE_SERVICE_KEY 환경변수가 필요합니다. GitHub Secrets에 등록하세요.');
     process.exit(1);
   }
-  // createClient with realtime disabled to avoid WebSocket issue, but we also have ws polyfill
   const supabase = createClient(url, serviceKey, {
     realtime: { transport: global.WebSocket }
   });
@@ -187,7 +183,6 @@ async function main() {
         example: generateExample(termName, cat),
         category: cat,
         longDesc: `${termName}에 대한 상세 설명. ${generateDefinition(termName, cat)} 2중 출처 검증 완료: ${verification.source1_title || ''} / ${verification.source2_title || ''}`,
-        defaultFav: '',
         verification,
         status: 'pending'
       };
@@ -208,6 +203,8 @@ async function main() {
     return;
   }
 
+  // FIX v3: terms_pending에 defaultFav 컬럼이 없어서 제거 - 실제 존재하는 컬럼만 INSERT
+  // Supabase terms_pending 테이블 구조에 맞춰 필요한 컬럼만 넣음
   const insertData = generated.map(g=>({
     id: g.id,
     term: g.term,
@@ -216,26 +213,53 @@ async function main() {
     example: g.example,
     category: g.category,
     longDesc: g.longDesc,
-    defaultFav: g.defaultFav,
     verification: g.verification,
     status: 'pending'
   }));
 
+  console.log('INSERT 시도:', insertData.map(d=>d.id));
   const { data: inserted, error: insertError } = await supabase.from('terms_pending').insert(insertData).select();
   if (insertError) {
     console.error('terms_pending INSERT 실패:', insertError);
-    process.exit(1);
+    // 컬럼 에러 시 longDesc 대신 longdesc로 재시도
+    if (insertError.message.includes('longDesc') || insertError.message.includes('longdesc')) {
+      console.log('longDesc 컬럼명 재시도 (longdesc)');
+      const retryData = insertData.map(d=>({
+        id: d.id,
+        term: d.term,
+        fullname: d.fullname,
+        meaning: d.meaning,
+        example: d.example,
+        category: d.category,
+        longdesc: d.longDesc,
+        verification: d.verification,
+        status: 'pending'
+      }));
+      const { data: inserted2, error: error2 } = await supabase.from('terms_pending').insert(retryData).select();
+      if (error2) {
+        console.error('재시도도 실패:', error2);
+        process.exit(1);
+      }
+      console.log(`terms_pending에 ${inserted2.length}개 INSERT 성공 (재시도):`, inserted2.map(t=>t.id));
+    } else {
+      process.exit(1);
+    }
+  } else {
+    console.log(`terms_pending에 ${inserted.length}개 INSERT 성공:`, inserted.map(t=>t.id));
   }
 
-  console.log(`terms_pending에 ${inserted.length}개 INSERT 성공:`, inserted.map(t=>t.id));
-
-  await supabase.from('automation_logs').insert({
-    categories: targetCategories,
-    generated_count: generated.length,
-    inserted_ids: inserted.map(t=>t.id),
-    verification: generated.map(g=>({ term: g.term, verification: g.verification })),
-    triggered_by: process.env.INPUT_CATEGORIES ? 'manual' : 'schedule'
-  });
+  // 로그 기록 (automation_logs)
+  try {
+    await supabase.from('automation_logs').insert({
+      categories: targetCategories,
+      generated_count: generated.length,
+      inserted_ids: insertData.map(d=>d.id),
+      verification: generated.map(g=>({ term: g.term, verification: g.verification })),
+      triggered_by: process.env.INPUT_CATEGORIES ? 'manual' : 'schedule'
+    });
+  } catch (e) {
+    console.log('automation_logs 기록 실패 (무시):', e.message);
+  }
 
   if (settings?.id) {
     await supabase.from('automation_settings').update({ last_run_at: new Date().toISOString() }).eq('id', settings.id);
