@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>관리자 - glossary</title>
+  <title>관리자 - glossary (Tier3 자동화)</title>
   <link rel="stylesheet" href="./css/app.css" />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     :root { --bg:#fff; --surface:#fff; --surface-2:#f5f5f5; --border:#e5e7eb; }
-    body { background:var(--bg); }
+    body { background:var(--bg); font-family:ui-sans-serif,system-ui,sans-serif; }
+    .mono { font-family:ui-monospace,monospace; }
   </style>
   <script type="importmap">{"imports":{"xlsx":"https://esm.sh/xlsx@0.18.5","@supabase/supabase-js":"https://esm.sh/@supabase/supabase-js@2.45.4"}}</script>
 </head>
@@ -17,14 +18,18 @@
 <script type="module">
 import { supabase } from './js/supabase.js';
 import { loadTerms, normalizeTerm } from './js/loader.js';
-import { exportAllTerms, exportFavorites, importFromExcel, generateCSVFromTerms } from './js/export.js';
-import { CATEGORIES, getCategoryColor, LOCAL_STORAGE_KEYS } from './js/config.js';
+import { exportAllTerms, generateCSVFromTerms } from './js/export.js';
+import { CATEGORIES, CATEGORY_COLORS, getCategoryColor } from './js/config.js';
 
 let allTerms = [];
 let filtered = [];
 let searchQuery = '';
-let editingId = null; // 수정 중인 id
+let editingId = null;
 let isCustomCategory = false;
+let currentTab = 'crud'; // crud | automation | pending
+let automationSettings = null;
+let pendingTerms = [];
+let pendingFilter = '';
 
 async function checkAuth() {
   const { data } = await supabase.auth.getSession();
@@ -37,6 +42,8 @@ function validateId(id, isEdit=false) {
   if (!isEdit) {
     const dup = allTerms.some(t => t.id.toLowerCase() === id.toLowerCase());
     if (dup) return `이미 존재하는 id입니다: ${id} (중복 불가, 키필드)`;
+    const dupPending = pendingTerms.some(t => t.id.toLowerCase() === id.toLowerCase());
+    if (dupPending) return `Pending에 이미 존재: ${id}`;
   }
   return null;
 }
@@ -48,14 +55,13 @@ function renderLogin() {
       <div class="w-full max-w-[400px] rounded-[24px] border bg-white p-8 shadow-sm">
         <div class="h-10 w-10 rounded-xl bg-black text-white grid place-items-center font-bold mb-4">IT</div>
         <h1 class="text-[20px] font-extrabold">glossary 관리자 로그인</h1>
-        <p class="text-[13px] text-zinc-500 mt-1">Supabase Auth로 로그인해야 CRUD가 가능합니다. RLS 정책이 적용됩니다.</p>
+        <p class="text-[13px] text-zinc-500 mt-1">Supabase Auth 로그인 후 Tier3 자동화 사용 가능</p>
         <div class="mt-6 space-y-3">
           <input id="email" type="email" placeholder="admin@glossary.local" class="w-full h-11 px-4 rounded-full border bg-zinc-50 outline-none text-[14px]" />
           <input id="password" type="password" placeholder="비밀번호" class="w-full h-11 px-4 rounded-full border bg-zinc-50 outline-none text-[14px]" />
           <button id="loginBtn" class="w-full h-11 rounded-full bg-black text-white font-semibold">로그인</button>
           <a href="./index.html" class="block text-center text-[12px] text-zinc-400 underline">← 대시보드로 돌아가기</a>
           <div id="loginMsg" class="text-[12px] text-red-500 min-h-[18px]"></div>
-          <div class="text-[11px] text-zinc-400 p-3 bg-zinc-50 rounded-xl">초보자용: Supabase Dashboard > Authentication > Users 에서 만든 이메일/비번을 입력하세요. 이전 ai1283 해시 방식은 삭제되었습니다.</div>
         </div>
       </div>
     </div>
@@ -70,11 +76,29 @@ function renderLogin() {
       const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
       if (error) throw error;
       renderAdmin();
-    } catch (e) {
-      msg.textContent = '로그인 실패: ' + e.message;
-    }
+    } catch (e) { msg.textContent = '로그인 실패: ' + e.message; }
   };
-  document.getElementById('password').addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('loginBtn').click(); });
+}
+
+async function loadAutomationSettings() {
+  try {
+    const { data, error } = await supabase.from('automation_settings').select('*').order('created_at', { ascending: false }).limit(1).single();
+    if (error && error.code !== 'PGRST116') throw error;
+    automationSettings = data || { selected_categories: null, schedule_type: 'weekly', weekly_count: 5, enabled: true };
+  } catch {
+    automationSettings = { selected_categories: null, schedule_type: 'weekly', weekly_count: 5, enabled: true };
+  }
+}
+
+async function loadPendingTerms() {
+  try {
+    const { data, error } = await supabase.from('terms_pending').select('*').eq('status','pending').order('created_at', { ascending: false }).limit(100);
+    if (error) throw error;
+    pendingTerms = data || [];
+  } catch (e) {
+    console.error('pending load failed', e);
+    pendingTerms = [];
+  }
 }
 
 async function renderAdmin() {
@@ -82,18 +106,21 @@ async function renderAdmin() {
     const { allTerms: loaded } = await loadTerms();
     allTerms = loaded;
   } catch {}
+  await loadAutomationSettings();
+  await loadPendingTerms();
   filtered = [...allTerms];
   const root = document.getElementById('root');
   const { data: { user } } = await supabase.auth.getUser();
+  const pendingCount = pendingTerms.length;
 
   root.innerHTML = `
     <header class="sticky top-0 z-20 border-b bg-white/90 backdrop-blur-xl">
-      <div class="mx-auto max-w-[1400px] px-6 h-[64px] flex items-center justify-between">
+      <div class="mx-auto max-w-[1600px] px-6 h-[64px] flex items-center justify-between">
         <div class="flex items-center gap-3">
           <div class="h-9 w-9 rounded-xl bg-black text-white grid place-items-center font-bold">IT</div>
           <div>
-            <div class="font-extrabold">glossary 관리자</div>
-            <div class="text-[11px] text-zinc-500">${user?.email} · Supabase · ${allTerms.length}개 · id 중복 불가 (키필드)</div>
+            <div class="font-extrabold">glossary 관리자 - Tier3 자동화</div>
+            <div class="text-[11px] text-zinc-500">${user?.email} · ${allTerms.length}개 · Pending ${pendingCount}개 · 정책 A (무기한 보관)</div>
           </div>
         </div>
         <div class="flex gap-2">
@@ -101,39 +128,46 @@ async function renderAdmin() {
           <button id="logoutBtn" class="h-9 px-4 rounded-full border bg-zinc-50 text-[13px]">로그아웃</button>
         </div>
       </div>
+      <div class="mx-auto max-w-[1600px] px-6 flex gap-2 py-3 border-t bg-zinc-50/50">
+        <button data-tab="crud" class="tab-btn h-8 px-4 rounded-full border text-[13px] ${currentTab==='crud'?'bg-black text-white border-black':'bg-white'}">CRUD (${allTerms.length})</button>
+        <button data-tab="automation" class="tab-btn h-8 px-4 rounded-full border text-[13px] ${currentTab==='automation'?'bg-black text-white border-black':'bg-white'}">자동화 설정 ⚙️</button>
+        <button data-tab="pending" class="tab-btn h-8 px-4 rounded-full border text-[13px] ${currentTab==='pending'?'bg-black text-white border-black':'bg-white'}">Pending 승인 ${pendingCount>0?`🔴 ${pendingCount}`:''}</button>
+      </div>
     </header>
 
-    <main class="mx-auto max-w-[1400px] px-6 py-6 grid lg:grid-cols-[380px_1fr] gap-6">
-      <!-- LEFT: CRUD 폼 -->
+    <main class="mx-auto max-w-[1600px] px-6 py-6">
+      ${currentTab==='crud' ? renderCrudTab() : ''}
+      ${currentTab==='automation' ? renderAutomationTab() : ''}
+      ${currentTab==='pending' ? renderPendingTab() : ''}
+    </main>
+  `;
+
+  document.getElementById('logoutBtn').onclick = async () => { await supabase.auth.signOut(); renderLogin(); };
+  document.querySelectorAll('.tab-btn').forEach(b=>{
+    b.onclick = ()=>{ currentTab = b.dataset.tab; renderAdmin(); };
+  });
+
+  if (currentTab==='crud') attachCrudEvents();
+  if (currentTab==='automation') attachAutomationEvents();
+  if (currentTab==='pending') attachPendingEvents();
+}
+
+function renderCrudTab() {
+  return `
+    <div class="grid lg:grid-cols-[380px_1fr] gap-6">
       <div class="space-y-4">
         <div class="rounded-[20px] border bg-white p-5">
           <div class="flex justify-between items-center">
-            <h2 class="font-bold text-[15px]">${editingId ? '용어 수정' : '신규 용어 추가 (Create)'}</h2>
+            <h2 class="font-bold text-[15px]">${editingId ? '용어 수정' : '신규 용어 추가'}</h2>
             ${editingId ? `<button id="cancelEdit" class="text-[12px] underline text-zinc-500">취소</button>` : ''}
           </div>
-          <p class="text-[11px] text-zinc-500 mt-1">id는 키필드, 중복 불가. category는 직접 입력 허용.</p>
+          <p class="text-[11px] text-zinc-500 mt-1">id 키필드 중복 불가, category 직접 입력 허용 (Tier3 유지)</p>
           <div class="mt-4 space-y-3">
-            <div>
-              <label class="text-[11px] font-bold text-zinc-600">id * (키필드, 중복 불가)</label>
-              <input id="f-id" placeholder="예: crud, react-hooks" class="mt-1 w-full h-10 px-3 rounded-xl border bg-zinc-50 text-[13px] mono" ${editingId ? 'readonly' : ''} />
-              <div id="f-id-msg" class="text-[11px] text-red-500 mt-1"></div>
-            </div>
-            <div>
-              <label class="text-[11px] font-bold">term *</label>
-              <input id="f-term" class="mt-1 w-full h-10 px-3 rounded-xl border text-[13px]" />
-            </div>
-            <div>
-              <label class="text-[11px] font-bold">fullname</label>
-              <input id="f-fullname" class="mt-1 w-full h-10 px-3 rounded-xl border text-[13px]" />
-            </div>
-            <div>
-              <label class="text-[11px] font-bold">meaning *</label>
-              <textarea id="f-meaning" rows="3" class="mt-1 w-full p-3 rounded-xl border text-[13px]"></textarea>
-            </div>
-            <div>
-              <label class="text-[11px] font-bold">example</label>
-              <textarea id="f-example" rows="2" class="mt-1 w-full p-3 rounded-xl border text-[13px]"></textarea>
-            </div>
+            <div><label class="text-[11px] font-bold">id *</label><input id="f-id" placeholder="예: crud" class="mt-1 w-full h-10 px-3 rounded-xl border bg-zinc-50 text-[13px] mono" ${editingId ? 'readonly' : ''} /><div id="f-id-msg" class="text-[11px] text-red-500 mt-1"></div></div>
+            <div><label class="text-[11px] font-bold">term *</label><input id="f-term" class="mt-1 w-full h-10 px-3 rounded-xl border text-[13px]" /></div>
+            <div><label class="text-[11px] font-bold">fullname</label><input id="f-fullname" class="mt-1 w-full h-10 px-3 rounded-xl border text-[13px]" /></div>
+            <div><label class="text-[11px] font-bold">meaning *</label><textarea id="f-meaning" rows="3" class="mt-1 w-full p-3 rounded-xl border text-[13px]"></textarea></div>
+            <div><label class="text-[11px] font-bold">example</label><textarea id="f-example" rows="2" class="mt-1 w-full p-3 rounded-xl border text-[13px]"></textarea></div>
             <div>
               <label class="text-[11px] font-bold">category * (직접 입력 허용)</label>
               <select id="f-category-select" class="mt-1 w-full h-10 px-3 rounded-xl border text-[13px]">
@@ -142,101 +176,183 @@ async function renderAdmin() {
               </select>
               <input id="f-category-custom" placeholder="신규 카테고리 직접 입력" class="mt-2 w-full h-10 px-3 rounded-xl border bg-amber-50 text-[13px] hidden" />
             </div>
-            <div>
-              <label class="text-[11px] font-bold">longDesc</label>
-              <textarea id="f-longdesc" rows="2" class="mt-1 w-full p-3 rounded-xl border text-[12px]"></textarea>
-            </div>
-            <div>
-              <label class="text-[11px] font-bold">defaultFav</label>
-              <input id="f-defaultfav" placeholder="true 또는 비우기" class="mt-1 w-full h-10 px-3 rounded-xl border text-[13px]" />
-            </div>
-            <button id="saveBtn" class="w-full h-11 rounded-full bg-black text-white font-semibold">${editingId ? '수정 저장 (Update)' : '추가 (Create)'}</button>
+            <div><label class="text-[11px] font-bold">longDesc</label><textarea id="f-longdesc" rows="2" class="mt-1 w-full p-3 rounded-xl border text-[12px]"></textarea></div>
+            <div><label class="text-[11px] font-bold">defaultFav</label><input id="f-defaultfav" placeholder="true 또는 비우기" class="mt-1 w-full h-10 px-3 rounded-xl border text-[13px]" /></div>
+            <button id="saveBtn" class="w-full h-11 rounded-full bg-black text-white font-semibold">${editingId ? '수정 저장' : '추가'}</button>
             <div id="formMsg" class="text-[12px] min-h-[18px]"></div>
           </div>
         </div>
-
         <div class="rounded-[20px] border bg-white p-5">
-          <h3 class="font-bold text-[14px]">데이터 처리 방식 (Supabase)</h3>
-          <div class="text-[12px] text-zinc-600 mt-2 leading-relaxed space-y-2">
-            <p><b>1. 즉시 반영:</b> Create/Update/Delete 시 Supabase에 바로 저장됩니다. CSV 다운로드 후 GitHub 교체 과정 불필요.</p>
-            <p><b>2. id:</b> PK, 중복 불가. 클라이언트에서 먼저 중복 체크, DB에서도 PK 제약으로 2차 방어.</p>
-            <p><b>3. category:</b> 기존 12개 외 직접 입력 허용. 새로 입력된 카테고리는 자동으로 회색 dot으로 표시되며, config.js에 색상 추가 가능.</p>
-            <p><b>4. Fallback:</b> Supabase 장애 시 index.html은 terms.csv를 자동 로드.</p>
-          </div>
-          <div class="mt-4 grid grid-cols-2 gap-2">
-            <button id="exportAllBtn" class="h-9 rounded-full border text-[12px]">전체 엑셀 다운로드</button>
-            <button id="exportCsvBtn" class="h-9 rounded-full border text-[12px]">CSV 백업 다운로드</button>
+          <h3 class="font-bold text-[13px]">백업</h3>
+          <div class="mt-3 grid grid-cols-2 gap-2">
+            <button id="exportAllBtn" class="h-9 rounded-full border text-[12px]">엑셀 다운로드</button>
+            <button id="exportCsvBtn" class="h-9 rounded-full border text-[12px]">CSV 백업</button>
           </div>
         </div>
       </div>
-
-      <!-- RIGHT: 테이블 -->
       <div class="rounded-[20px] border bg-white p-5 min-w-0">
-        <div class="flex flex-col sm:flex-row gap-3 justify-between items-start sm:items-center">
-          <h2 class="font-bold">용어 목록 (Read) · ${allTerms.length}개</h2>
-          <input id="searchInput" placeholder="id, term, meaning 검색" class="h-10 px-4 rounded-full border bg-zinc-50 text-[13px] w-full sm:w-[260px]" />
+        <div class="flex justify-between items-center">
+          <h2 class="font-bold">용어 목록 ${allTerms.length}개</h2>
+          <input id="searchInput" placeholder="id, term 검색" class="h-10 px-4 rounded-full border bg-zinc-50 text-[13px] w-[220px]" />
         </div>
         <div class="mt-4 overflow-auto max-h-[80vh] border rounded-xl">
-          <table class="w-full text-[12px]">
-            <thead class="sticky top-0 bg-zinc-50 border-b">
-              <tr><th class="p-2.5 text-left">id (키)</th><th class="p-2.5 text-left">term</th><th class="p-2.5 text-left">category</th><th class="p-2.5 text-left">meaning</th><th class="p-2.5 text-right">액션</th></tr>
-            </thead>
-            <tbody id="tbody"></tbody>
-          </table>
+          <table class="w-full text-[12px]"><thead class="sticky top-0 bg-zinc-50 border-b"><tr><th class="p-2.5 text-left">id</th><th class="p-2.5 text-left">term</th><th class="p-2.5 text-left">category</th><th class="p-2.5 text-left">meaning</th><th class="p-2.5 text-right">액션</th></tr></thead><tbody id="tbody"></tbody></table>
         </div>
         <div id="tableMsg" class="mt-3 text-[11px] text-zinc-500"></div>
       </div>
-    </main>
+    </div>
   `;
+}
 
-  document.getElementById('logoutBtn').onclick = async () => { await supabase.auth.signOut(); renderLogin(); };
-  document.getElementById('exportAllBtn').onclick = () => exportAllTerms(allTerms);
-  document.getElementById('exportCsvBtn').onclick = () => {
-    const csv = generateCSVFromTerms(allTerms);
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'terms.csv'; a.click();
-  };
+function renderAutomationTab() {
+  const sel = automationSettings?.selected_categories || null;
+  const isAutoMode = !sel || sel.length===0;
+  return `
+    <div class="max-w-[900px] space-y-6">
+      <div class="rounded-[20px] border bg-white p-6">
+        <h2 class="font-bold text-[16px]">Tier3 자동화 설정 (B. GitHub Actions + 주 1회 + 요청 시)</h2>
+        <p class="text-[12px] text-zinc-500 mt-1">카테고리를 선택하면 해당 카테고리에서만 용어를 생성합니다. 아무 것도 선택하지 않으면(기본값 null) 자동 제안 모드로 동작합니다.</p>
+        
+        <div class="mt-6 space-y-4">
+          <div>
+            <label class="text-[13px] font-bold">1) 카테고리 선택 (복수 선택 가능, 비우면 자동 제안 모드)</label>
+            <div class="mt-2 grid grid-cols-2 md:grid-cols-3 gap-2 p-4 border rounded-xl bg-zinc-50 max-h-[240px] overflow-auto">
+              ${CATEGORIES.slice(0,13).map(c=>{
+                const checked = sel ? sel.includes(c) : false;
+                return `<label class="flex items-center gap-2 text-[12px]"><input type="checkbox" value="${c}" class="cat-check" ${checked?'checked':''} /> ${c}</label>`;
+              }).join('')}
+            </div>
+            <div class="mt-2 flex gap-2">
+              <input id="customCatInput" placeholder="신규 카테고리 직접 입력 (예: 블록체인)" class="flex-1 h-9 px-3 rounded-full border text-[12px]" />
+              <button id="addCustomCat" class="h-9 px-4 rounded-full border bg-white text-[12px]">직접 추가</button>
+            </div>
+            <div id="selectedCatDisplay" class="mt-3 text-[12px] p-3 rounded-xl bg-amber-50 border border-amber-200 min-h-[40px]">
+              ${isAutoMode ? '현재: <b>자동 제안 모드 (null)</b> - 시스템이 부족한 카테고리를 자동 분석하여 제안' : `현재 선택: <b>${sel.join(', ')}</b>`}
+            </div>
+          </div>
 
-  // category 직접 입력 로직
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="text-[12px] font-bold">2) 주 생성 개수</label>
+              <select id="weeklyCount" class="mt-1 w-full h-10 px-3 rounded-xl border text-[13px]">
+                <option value="3" ${automationSettings?.weekly_count===3?'selected':''}>3개/주 (안전)</option>
+                <option value="5" ${automationSettings?.weekly_count===5?'selected':''}>5개/주 (추천)</option>
+                <option value="10" ${automationSettings?.weekly_count===10?'selected':''}>10개/주 (많음)</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-[12px] font-bold">3) 활성화</label>
+              <select id="enabledSelect" class="mt-1 w-full h-10 px-3 rounded-xl border text-[13px]">
+                <option value="true" ${automationSettings?.enabled?'selected':''}>ON - 매주 일요일 23:50 자동 실행</option>
+                <option value="false" ${!automationSettings?.enabled?'selected':''}>OFF - 수동 실행만</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="flex gap-2">
+            <button id="saveAutomation" class="h-11 px-6 rounded-full bg-black text-white font-semibold text-[13px]">설정 저장 (automation_settings)</button>
+            <button id="triggerNow" class="h-11 px-6 rounded-full border bg-white font-semibold text-[13px]">지금 제안 생성 (수동 트리거, STEP 3에서 연결)</button>
+          </div>
+          <div id="automationMsg" class="text-[12px] min-h-[20px]"></div>
+
+          <div class="mt-6 p-4 rounded-xl bg-blue-50 border border-blue-200 text-[11px] leading-relaxed">
+            <b>초보자 안내 - GitHub Actions 설정 방법 (다음 STEP 3에서 필요):</b><br/>
+            1) GitHub repo > Settings > Secrets and variables > Actions > New repository secret<br/>
+            &nbsp;&nbsp; - Name: SUPABASE_URL, Value: https://efklbyhqsmbieefbamen.supabase.co<br/>
+            &nbsp;&nbsp; - Name: SUPABASE_SERVICE_KEY, Value: (Supabase Dashboard > Project Settings > API > service_role 키)<br/>
+            2) 이 키는 프론트에 노출되면 안 되며, Actions에서만 사용됩니다.<br/>
+            3) 스케줄: 매주 일요일 23:50 KST 자동 실행 + 필요 시 수동 실행 가능
+          </div>
+        </div>
+      </div>
+
+      <div class="rounded-[20px] border bg-white p-6">
+        <h3 class="font-bold text-[13px]">현재 설정 요약</h3>
+        <div class="mt-2 text-[12px] font-mono bg-zinc-50 p-3 rounded-xl border">
+          selected_categories: ${isAutoMode ? 'null (자동 제안 모드)' : JSON.stringify(sel)}<br/>
+          weekly_count: ${automationSettings?.weekly_count || 5}<br/>
+          enabled: ${automationSettings?.enabled}<br/>
+          last_run_at: ${automationSettings?.last_run_at || '아직 실행 안 됨'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPendingTab() {
+  const filteredPending = pendingTerms.filter(t=>{
+    if (!pendingFilter) return true;
+    const q = pendingFilter.toLowerCase();
+    return `${t.id} ${t.term} ${t.category} ${t.meaning}`.toLowerCase().includes(q);
+  });
+  return `
+    <div class="space-y-4">
+      <div class="rounded-[20px] border bg-white p-6">
+        <div class="flex justify-between items-center">
+          <h2 class="font-bold text-[16px]">Pending 승인 (정책 A: 무기한 보관) - ${pendingTerms.length}개</h2>
+          <input id="pendingSearch" placeholder="Pending 검색" class="h-9 px-4 rounded-full border bg-zinc-50 text-[12px] w-[200px]" value="${pendingFilter}" />
+        </div>
+        <p class="text-[11px] text-zinc-500 mt-2">승인하지 않으면? → <b>그대로 보관</b>됩니다. index.html에 노출 안 됨. 다음 주에 또 5개가 쌓입니다. 14일이 지나도 자동 삭제 안 됩니다. (정책 A)</p>
+        
+        ${pendingTerms.length===0 ? `
+          <div class="mt-8 py-12 text-center border-2 border-dashed rounded-xl">
+            <div class="text-[14px] font-bold">Pending이 없습니다</div>
+            <div class="text-[12px] text-zinc-500 mt-1">매주 일요일 23:50에 자동 생성되거나, 자동화 설정 탭에서 "지금 제안 생성"을 눌러보세요 (STEP 3 이후 동작)</div>
+          </div>
+        ` : `
+          <div class="mt-4 overflow-auto border rounded-xl max-h-[70vh]">
+            <table class="w-full text-[12px]">
+              <thead class="sticky top-0 bg-zinc-50 border-b"><tr><th class="p-2.5 text-left">id (중복 불가)</th><th class="p-2.5 text-left">term</th><th class="p-2.5 text-left">category</th><th class="p-2.5 text-left">meaning</th><th class="p-2.5 text-left">검증 출처 (2중)</th><th class="p-2.5 text-right">액션</th></tr></thead>
+              <tbody>
+                ${filteredPending.map(t=>{
+                  const v = t.verification || {};
+                  return `
+                  <tr class="border-t hover:bg-zinc-50">
+                    <td class="p-2.5 mono font-bold text-[11px]">${t.id}</td>
+                    <td class="p-2.5 font-semibold">${t.term}</td>
+                    <td class="p-2.5"><span class="px-2 py-0.5 rounded-full border text-[10px]" style="border-color:${getCategoryColor(t.category)}40">${t.category}</span></td>
+                    <td class="p-2.5 max-w-[200px] truncate">${t.meaning}</td>
+                    <td class="p-2.5 text-[11px]">
+                      ${v.source1_url ? `<a href="${v.source1_url}" target="_blank" class="underline text-blue-600 block">출처1: ${v.source1_title||'링크'}</a>` : '<span class="text-zinc-400">출처1 없음</span>'}
+                      ${v.source2_url ? `<a href="${v.source2_url}" target="_blank" class="underline text-green-600 block">출처2: ${v.source2_title||'링크'}</a>` : '<span class="text-zinc-400">출처2 없음</span>'}
+                      ${v.match_score ? `<span class="text-[10px]">일치도: ${v.match_score}%</span>` : ''}
+                    </td>
+                    <td class="p-2.5 text-right">
+                      <div class="inline-flex gap-1">
+                        <button data-approve="${t.id}" class="approve-btn h-7 px-3 rounded-full bg-black text-white text-[11px]">승인</button>
+                        <button data-reject="${t.id}" class="reject-btn h-7 px-3 rounded-full border bg-white text-red-600 text-[11px]">거절</button>
+                      </div>
+                    </td>
+                  </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        `}
+        <div class="mt-3 text-[11px] text-zinc-500">${filteredPending.length} / ${pendingTerms.length} 표시 · id 중복 불가 · 승인 시 terms 테이블로 이동, 거절 시 rejected 처리</div>
+      </div>
+    </div>
+  `;
+}
+
+function attachCrudEvents() {
   const sel = document.getElementById('f-category-select');
   const customInput = document.getElementById('f-category-custom');
   sel.addEventListener('change', () => {
     if (sel.value === '__custom__') { customInput.classList.remove('hidden'); customInput.focus(); isCustomCategory = true; }
     else { customInput.classList.add('hidden'); isCustomCategory = false; }
   });
-
   function getCategoryValue() {
     if (sel.value === '__custom__') return customInput.value.trim();
     return sel.value;
   }
-
-  function fillForm(t) {
-    document.getElementById('f-id').value = t.id;
-    document.getElementById('f-term').value = t.term;
-    document.getElementById('f-fullname').value = t.fullname || '';
-    document.getElementById('f-meaning').value = t.meaning || '';
-    document.getElementById('f-example').value = t.example || '';
-    document.getElementById('f-longdesc').value = t.longDesc || t.longdesc || '';
-    document.getElementById('f-defaultfav').value = t.defaultFav || t.defaultfav || '';
-    // category
-    if (CATEGORIES.includes(t.category)) { sel.value = t.category; customInput.classList.add('hidden'); isCustomCategory=false; }
-    else { sel.value='__custom__'; customInput.classList.remove('hidden'); customInput.value=t.category; isCustomCategory=true; }
-  }
-
-  function clearForm() {
-    editingId = null;
-    document.getElementById('f-id').value=''; document.getElementById('f-id').readOnly=false;
-    document.getElementById('f-term').value=''; document.getElementById('f-fullname').value='';
-    document.getElementById('f-meaning').value=''; document.getElementById('f-example').value='';
-    document.getElementById('f-longdesc').value=''; document.getElementById('f-defaultfav').value='';
-    sel.value=CATEGORIES[0]; customInput.classList.add('hidden'); customInput.value=''; isCustomCategory=false;
-    document.getElementById('f-id-msg').textContent=''; document.getElementById('formMsg').textContent='';
-    // render again to update title
-    renderAdmin();
-  }
-
-  document.getElementById('cancelEdit')?.addEventListener('click', clearForm);
-
+  document.getElementById('exportAllBtn').onclick = () => exportAllTerms(allTerms);
+  document.getElementById('exportCsvBtn').onclick = () => {
+    const csv = generateCSVFromTerms(allTerms);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'terms.csv'; a.click();
+  };
   document.getElementById('saveBtn').onclick = async () => {
     const id = document.getElementById('f-id').value.trim().toLowerCase();
     const term = document.getElementById('f-term').value.trim();
@@ -248,17 +364,13 @@ async function renderAdmin() {
     const defaultFav = document.getElementById('f-defaultfav').value.trim();
     const msgEl = document.getElementById('formMsg');
     const idMsg = document.getElementById('f-id-msg');
-
-    if (!term || !meaning || !category) { msgEl.textContent='term, meaning, category는 필수입니다.'; msgEl.className='text-[12px] text-red-500'; return; }
+    if (!term || !meaning || !category) { msgEl.textContent='term, meaning, category는 필수'; msgEl.className='text-[12px] text-red-500'; return; }
     const idErr = validateId(id, !!editingId);
     if (idErr) { idMsg.textContent=idErr; return; } else idMsg.textContent='';
-
     const payload = { id, term, fullname, meaning, example, category, longDesc, defaultFav };
-
-    msgEl.textContent='저장 중...'; msgEl.className='text-[12px] text-zinc-500';
+    msgEl.textContent='저장 중...';
     try {
       if (editingId) {
-        // Update: id는 변경 불가
         const { error } = await supabase.from('terms').update(payload).eq('id', editingId);
         if (error) throw error;
         msgEl.textContent=`수정 완료: ${id}`; msgEl.className='text-[12px] text-green-600';
@@ -267,87 +379,148 @@ async function renderAdmin() {
         if (error) throw error;
         msgEl.textContent=`추가 완료: ${id}`; msgEl.className='text-[12px] text-green-600';
       }
-      // reload
       const { allTerms: reloaded } = await loadTerms();
       allTerms = reloaded; filtered = [...allTerms]; renderTable();
-      if (!editingId) document.getElementById('f-id').value='';
-    } catch (e) {
-      msgEl.textContent='저장 실패: '+e.message; msgEl.className='text-[12px] text-red-500';
-      if (e.message.includes('duplicate') || e.message.includes('_pkey')) {
-        idMsg.textContent='DB에서도 중복 감지: 이미 존재하는 id입니다.';
-      }
-    }
+    } catch (e) { msgEl.textContent='실패: '+e.message; msgEl.className='text-[12px] text-red-500'; }
   };
-
   function renderTable() {
     const tbody = document.getElementById('tbody');
     const q = searchQuery.toLowerCase();
-    filtered = allTerms.filter(t => {
-      if (!q) return true;
-      return `${t.id} ${t.term} ${t.meaning} ${t.category}`.toLowerCase().includes(q);
-    });
+    filtered = allTerms.filter(t => !q || `${t.id} ${t.term} ${t.meaning} ${t.category}`.toLowerCase().includes(q));
     tbody.innerHTML = filtered.map(t => `
-      <tr class="border-t hover:bg-zinc-50">
-        <td class="p-2.5 mono text-[11px] font-bold">${t.id}</td>
-        <td class="p-2.5 font-semibold">${t.term}</td>
-        <td class="p-2.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px]" style="border-color:${getCategoryColor(t.category)}20"><span class="h-1.5 w-1.5 rounded-full" style="background:${getCategoryColor(t.category)}"></span>${t.category}</span></td>
-        <td class="p-2.5 max-w-[260px] truncate">${t.meaning}</td>
-        <td class="p-2.5 text-right">
-          <div class="inline-flex gap-1">
-            <button data-edit="${t.id}" class="edit-btn h-7 px-2.5 rounded-full border bg-white text-[11px]">수정</button>
-            <button data-del="${t.id}" class="del-btn h-7 px-2.5 rounded-full border bg-red-50 text-red-600 text-[11px]">삭제</button>
-          </div>
-        </td>
-      </tr>
+      <tr class="border-t hover:bg-zinc-50"><td class="p-2.5 mono text-[11px] font-bold">${t.id}</td><td class="p-2.5 font-semibold">${t.term}</td><td class="p-2.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px]" style="border-color:${getCategoryColor(t.category)}20"><span class="h-1.5 w-1.5 rounded-full" style="background:${getCategoryColor(t.category)}"></span>${t.category}</span></td><td class="p-2.5 max-w-[260px] truncate">${t.meaning}</td><td class="p-2.5 text-right"><div class="inline-flex gap-1"><button data-edit="${t.id}" class="edit-btn h-7 px-2.5 rounded-full border bg-white text-[11px]">수정</button><button data-del="${t.id}" class="del-btn h-7 px-2.5 rounded-full border bg-red-50 text-red-600 text-[11px]">삭제</button></div></td></tr>
     `).join('');
-    document.getElementById('tableMsg').textContent = `${filtered.length} / ${allTerms.length} 표시 · id는 PK, 중복 불가 · category 직접 입력 허용`;
-    document.querySelectorAll('.edit-btn').forEach(b => {
-      b.onclick = () => {
-        const t = allTerms.find(x=>x.id===b.dataset.edit);
-        if (!t) return;
-        editingId = t.id;
-        fillForm(t);
-        window.scrollTo({ top:0, behavior:'smooth' });
-        // 제목 변경을 위해 상단 폼 영역 다시 렌더 없이 값만 유지, 버튼 텍스트 변경
-        document.querySelector('h2').textContent = '용어 수정';
-      };
-    });
-    document.querySelectorAll('.del-btn').forEach(b => {
-      b.onclick = async () => {
-        const id = b.dataset.del;
-        if (!confirm(`정말 삭제할까요? id=${id} (되돌릴 수 없음)`)) return;
-        try {
-          const { error } = await supabase.from('terms').delete().eq('id', id);
-          if (error) throw error;
-          allTerms = allTerms.filter(x=>x.id!==id);
-          renderTable();
-        } catch (e) { alert('삭제 실패: '+e.message); }
-      };
-    });
+    document.getElementById('tableMsg').textContent = `${filtered.length} / ${allTerms.length} 표시`;
+    document.querySelectorAll('.edit-btn').forEach(b=>{ b.onclick = ()=>{ const t = allTerms.find(x=>x.id===b.dataset.edit); if (!t) return; editingId = t.id; document.getElementById('f-id').value=t.id; document.getElementById('f-term').value=t.term; document.getElementById('f-fullname').value=t.fullname||''; document.getElementById('f-meaning').value=t.meaning||''; document.getElementById('f-example').value=t.example||''; document.getElementById('f-longdesc').value=t.longDesc||''; document.getElementById('f-defaultfav').value=t.defaultFav||''; const selEl=document.getElementById('f-category-select'); const cust=document.getElementById('f-category-custom'); if (CATEGORIES.includes(t.category)) { selEl.value=t.category; cust.classList.add('hidden'); } else { selEl.value='__custom__'; cust.classList.remove('hidden'); cust.value=t.category; } window.scrollTo({top:0, behavior:'smooth'}); }; });
+    document.querySelectorAll('.del-btn').forEach(b=>{ b.onclick = async ()=>{ if (!confirm(`삭제? ${b.dataset.del}`)) return; try { const { error } = await supabase.from('terms').delete().eq('id', b.dataset.del); if (error) throw error; allTerms = allTerms.filter(x=>x.id!==b.dataset.del); renderTable(); } catch (e) { alert('삭제 실패: '+e.message); } }; });
+  }
+  document.getElementById('searchInput').addEventListener('input', e=>{ searchQuery=e.target.value; renderTable(); });
+  document.getElementById('f-term').addEventListener('blur', () => { const idInput=document.getElementById('f-id'); if (editingId) return; if (idInput.value) return; const term=document.getElementById('f-term').value.trim().toLowerCase(); if (!term) return; idInput.value=term.replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40); });
+  renderTable();
+}
+
+function attachAutomationEvents() {
+  const checks = document.querySelectorAll('.cat-check');
+  const display = document.getElementById('selectedCatDisplay');
+  const customInput = document.getElementById('customCatInput');
+  let selected = automationSettings?.selected_categories ? [...automationSettings.selected_categories] : [];
+
+  function updateDisplay() {
+    if (selected.length===0) {
+      display.innerHTML = '현재: <b>자동 제안 모드 (null)</b> - 시스템이 부족한 카테고리를 자동 분석하여 제안';
+    } else {
+      display.innerHTML = `현재 선택: <b>${selected.join(', ')}</b>`;
+    }
   }
 
-  document.getElementById('searchInput').addEventListener('input', e=>{ searchQuery=e.target.value; renderTable(); });
-
-  // 초기 폼이 비어있으면 id 자동 생성 힌트
-  document.getElementById('f-term').addEventListener('blur', () => {
-    const idInput = document.getElementById('f-id');
-    if (editingId) return;
-    if (idInput.value) return;
-    const term = document.getElementById('f-term').value.trim().toLowerCase();
-    if (!term) return;
-    const gen = term.replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40);
-    idInput.value = gen;
+  checks.forEach(ch=>{
+    ch.onchange = (e)=>{
+      const val = e.target.value;
+      if (e.target.checked) { if (!selected.includes(val)) selected.push(val); }
+      else { selected = selected.filter(v=>v!==val); }
+      updateDisplay();
+    };
   });
 
-  renderTable();
+  document.getElementById('addCustomCat').onclick = ()=>{
+    const val = customInput.value.trim();
+    if (!val) return;
+    if (!selected.includes(val)) selected.push(val);
+    customInput.value='';
+    updateDisplay();
+    // 시각적으로도 체크박스 없으므로 display에만 추가, 저장 시에는 포함됨
+  };
+
+  document.getElementById('saveAutomation').onclick = async ()=>{
+    const weeklyCount = parseInt(document.getElementById('weeklyCount').value);
+    const enabled = document.getElementById('enabledSelect').value === 'true';
+    const payload = {
+      selected_categories: selected.length===0 ? null : selected,
+      weekly_count: weeklyCount,
+      enabled,
+      schedule_type: 'weekly'
+    };
+    const msg = document.getElementById('automationMsg');
+    msg.textContent='저장 중...';
+    try {
+      // 기존 설정이 있으면 update, 없으면 insert
+      if (automationSettings?.id) {
+        const { error } = await supabase.from('automation_settings').update({ ...payload, last_run_at: automationSettings.last_run_at }).eq('id', automationSettings.id);
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase.from('automation_settings').insert(payload).select().single();
+        if (error) throw error;
+        automationSettings = data;
+      }
+      // 로컬에도 반영
+      automationSettings = { ...automationSettings, ...payload };
+      msg.textContent = `저장 완료: ${selected.length===0 ? '자동 제안 모드(null)' : selected.join(', ')} / 주 ${weeklyCount}개 / ${enabled?'ON':'OFF'}`;
+      msg.className='text-[12px] text-green-600';
+    } catch (e) {
+      msg.textContent='저장 실패: '+e.message;
+      msg.className='text-[12px] text-red-500';
+    }
+  };
+
+  document.getElementById('triggerNow').onclick = async ()=>{
+    const msg = document.getElementById('automationMsg');
+    msg.textContent='수동 트리거는 STEP 3에서 GitHub Actions와 연결됩니다. 현재는 설정 저장만 가능합니다. GitHub에서 직접 Actions를 실행해보세요.';
+    msg.className='text-[12px] text-zinc-500';
+  };
+}
+
+function attachPendingEvents() {
+  document.getElementById('pendingSearch').addEventListener('input', e=>{
+    pendingFilter = e.target.value;
+    const tbody = document.querySelector('table tbody');
+    if (!tbody) return;
+    // 간단 필터: 전체 리렌더
+    renderAdmin();
+    setTimeout(()=>{ const inp=document.getElementById('pendingSearch'); if (inp) { inp.focus(); inp.value=pendingFilter; inp.setSelectionRange(pendingFilter.length, pendingFilter.length); } },0);
+  });
+
+  document.querySelectorAll('.approve-btn').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.approve;
+      const pending = pendingTerms.find(t=>t.id===id);
+      if (!pending) return;
+      if (!confirm(`승인하면 terms 테이블로 이동됩니다.\n${pending.term} (${pending.id})\n계속?`)) return;
+      try {
+        // id 중복 체크
+        const exists = allTerms.some(t=>t.id.toLowerCase()===id.toLowerCase());
+        if (exists) { alert(`이미 terms에 존재하는 id입니다: ${id}. 먼저 기존 용어를 수정하거나 삭제하세요.`); return; }
+        // terms에 insert
+        const { error: insertErr } = await supabase.from('terms').insert({
+          id: pending.id, term: pending.term, fullname: pending.fullname||'', meaning: pending.meaning,
+          example: pending.example||'', category: pending.category, longDesc: pending.longDesc||'', defaultFav: pending.defaultFav||''
+        });
+        if (insertErr) throw insertErr;
+        // pending 상태를 approved로 변경
+        const { error: updateErr } = await supabase.from('terms_pending').update({ status: 'approved' }).eq('id', id);
+        if (updateErr) throw updateErr;
+        alert(`승인 완료: ${pending.term}`);
+        renderAdmin();
+      } catch (e) { alert('승인 실패: '+e.message); }
+    };
+  });
+
+  document.querySelectorAll('.reject-btn').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.reject;
+      if (!confirm(`거절하면 rejected 상태로 보관됩니다 (정책 A: 삭제 안 됨).\n${id}`)) return;
+      try {
+        const { error } = await supabase.from('terms_pending').update({ status: 'rejected' }).eq('id', id);
+        if (error) throw error;
+        renderAdmin();
+      } catch (e) { alert('거절 실패: '+e.message); }
+    };
+  });
 }
 
 (async () => {
   if (await checkAuth()) renderAdmin();
   else renderLogin();
-  supabase.auth.onAuthStateChange((event) => {
-    if (event==='SIGNED_OUT') renderLogin();
-  });
+  supabase.auth.onAuthStateChange((event) => { if (event==='SIGNED_OUT') renderLogin(); });
 })();
 </script>
 </body>
