@@ -1,0 +1,45 @@
+name: Weekly Glossary Auto-Proposal (Tier3)
+
+on:
+  schedule:
+    - cron: '50 14 * * 0'  # 매주 일요일 14:50 UTC = 23:50 KST
+  workflow_dispatch:
+    inputs:
+      categories:
+        description: '강제 카테고리 (예: 프론트엔드,백엔드 또는 비우면 자동 제안 모드)'
+        required: false
+        default: ''
+      count:
+        description: '생성 개수 (1~10)'
+        required: false
+        default: '5'
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install @supabase/supabase-js
+
+      - name: Generate pending terms with dual verification
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          INPUT_CATEGORIES: ${{ inputs.categories }}
+          INPUT_COUNT: ${{ inputs.count }}
+        run: |
+          node scripts/generate-pending.js
+
+      - name: Log result
+        run: |
+          echo "Weekly generation completed. Check Supabase terms_pending table."
