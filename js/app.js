@@ -1,9 +1,9 @@
-// glossary/js/app.js - v3 FIX: single setFilter, sorted, no empty right space, same-size boxes
+// glossary/js/app.js - v4: right-aligned filters+search, categories below Top
 import React, { useState, useEffect, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { loadTerms } from './loader.js';
 import { getCategoryColor, TOP30, LOCAL_STORAGE_KEYS } from './config.js';
-import { Header, TermList, DetailPanel, CommandPalette } from './components.js';
+import { Header, CategoryBar, TermList, DetailPanel, CommandPalette } from './components.js';
 
 const h = React.createElement;
 
@@ -31,11 +31,8 @@ function App() {
     })();
   }, []);
 
-  useEffect(()=>{
-    try { const saved = localStorage.getItem(LOCAL_STORAGE_KEYS.favorites); if (saved) setFavorites(new Set(JSON.parse(saved))); } catch {}
-  }, []);
+  useEffect(()=>{ try { const s = localStorage.getItem(LOCAL_STORAGE_KEYS.favorites); if (s) setFavorites(new Set(JSON.parse(s))); } catch {} }, []);
   useEffect(()=>{ try { localStorage.setItem(LOCAL_STORAGE_KEYS.favorites, JSON.stringify([...favorites])); } catch {} }, [favorites]);
-
   useEffect(()=>{
     const saved = localStorage.getItem(LOCAL_STORAGE_KEYS.theme);
     const dark = saved ? saved==='dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -43,12 +40,10 @@ function App() {
     document.documentElement.classList.toggle('dark', dark);
   }, []);
   const toggleTheme = ()=>{
-    const next = !isDark;
-    setIsDark(next);
+    const next = !isDark; setIsDark(next);
     document.documentElement.classList.toggle('dark', next);
     localStorage.setItem(LOCAL_STORAGE_KEYS.theme, next?'dark':'light');
   };
-
   useEffect(()=>{
     const onKey = (e)=>{
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase()==='k') { e.preventDefault(); setIsCommandOpen(v=>!v); }
@@ -57,7 +52,6 @@ function App() {
     window.addEventListener('keydown', onKey);
     return ()=>window.removeEventListener('keydown', onKey);
   }, []);
-
   useEffect(()=>{ if (selectedTerm) history.replaceState(null, '', '#' + selectedTerm.id); }, [selectedTerm]);
 
   const filteredTerms = useMemo(()=>{
@@ -84,36 +78,28 @@ function App() {
     }
   }, [filteredTerms]);
 
-  const onSelectTerm = (t)=>{
-    setSelectedTerm(t);
-    setIsMobileOpen(false);
-    setIsCommandOpen(false);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
+  const onSelectTerm = (t)=>{ setSelectedTerm(t); setIsMobileOpen(false); setIsCommandOpen(false); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const setFilter = (filter)=>{
     if (filter===null) { setActiveFilter(null); setSelectedCategory(null); setSearchQuery(''); }
     else if (filter==='top30' || filter==='favorites') { setActiveFilter(filter); setSelectedCategory(null); setSearchQuery(''); }
     else { setSelectedCategory(filter); setActiveFilter(null); setSearchQuery(''); }
     setIsMobileOpen(false);
   };
-
-  const onToggleFav = (termName)=>{
-    setFavorites(prev=>{ const next = new Set(prev); if (next.has(termName)) next.delete(termName); else next.add(termName); return next; });
-  };
+  const onToggleFav = (termName)=>{ setFavorites(prev=>{ const next = new Set(prev); if (next.has(termName)) next.delete(termName); else next.add(termName); return next; }); };
 
   return h('div', { className: 'min-h-screen flex flex-col', style: { background: 'var(--bg)' } },
     h(Header, { searchQuery, setSearchQuery, onOpenCommand: ()=>setIsCommandOpen(true), totalTerms: allTerms.length, activeFilter, selectedCategory, setFilter, isDark, toggleTheme, setMobileOpen: setIsMobileOpen }),
+    h(CategoryBar, { categories, selectedCategory, activeFilter, searchQuery, setFilter, getColor: getCategoryColor }),
     h(CommandPalette, { isOpen: isCommandOpen, onClose: ()=>setIsCommandOpen(false), allTerms, categories, onSelectTerm, setFilter }),
-    h('div', { className: 'flex-1 mx-auto max-w-[1680px] w-full px-3 md:px-4 py-3 md:py-4 flex flex-col lg:flex-row gap-3 min-h-[calc(100vh-64px)]' },
-      h('div', { className: `${isMobileOpen ? 'fixed inset-0 z-40 pt-[64px] bg-[var(--bg)]' : 'hidden lg:flex'} lg:w-[340px] shrink-0 flex-col rounded-[16px] border overflow-hidden shadow-sm`, style: { background: 'var(--surface)', borderColor: 'var(--border)', maxHeight: isMobileOpen ? '100vh' : 'calc(100vh - 80px)', position: isMobileOpen ? 'fixed' : 'sticky', top: isMobileOpen ? '0' : '72px' } },
+    h('div', { className: 'flex-1 mx-auto max-w-[1680px] w-full px-3 md:px-4 py-3 md:py-4 flex flex-col lg:flex-row gap-3 min-h-[calc(100vh-100px)]' },
+      h('div', { className: `${isMobileOpen ? 'fixed inset-0 z-40 pt-[100px] bg-[var(--bg)]' : 'hidden lg:flex'} lg:w-[340px] shrink-0 flex-col rounded-[16px] border overflow-hidden shadow-sm`, style: { background: 'var(--surface)', borderColor: 'var(--border)', maxHeight: isMobileOpen ? '100vh' : 'calc(100vh - 116px)', position: isMobileOpen ? 'fixed' : 'sticky', top: isMobileOpen ? '0' : '108px' } },
         isMobileOpen && h('div', { className: 'p-3 border-b flex justify-between items-center', style: { borderColor: 'var(--border)' } },
           h('span', { className: 'text-[12px] font-bold' }, `목록 ${filteredTerms.length}개`),
           h('button', { onClick: ()=>setIsMobileOpen(false), className: 'h-7 px-2.5 rounded-full border text-[11px]', style: { background: 'var(--surface-2)', borderColor: 'var(--border)' } }, '닫기')
         ),
-        h(TermList, { terms: filteredTerms, selectedTerm, onSelectTerm, selectedCategory, activeFilter, categories, setFilter, getColor: getCategoryColor, searchQuery })
+        h(TermList, { terms: filteredTerms, selectedTerm, onSelectTerm, setFilter, getColor: getCategoryColor, searchQuery, selectedCategory, activeFilter })
       ),
-      h('div', { className: 'flex-1 min-w-0 rounded-[16px] border shadow-sm overflow-hidden', style: { background: 'var(--surface)', borderColor: 'var(--border)', minHeight: 'calc(100vh - 80px)' } },
+      h('div', { className: 'flex-1 min-w-0 rounded-[16px] border shadow-sm overflow-hidden', style: { background: 'var(--surface)', borderColor: 'var(--border)', minHeight: 'calc(100vh - 116px)' } },
         h(DetailPanel, { term: selectedTerm, allTerms, favorites, onToggleFav, onSelectTerm, getColor: getCategoryColor })
       )
     ),
