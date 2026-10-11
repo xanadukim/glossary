@@ -1,5 +1,22 @@
-// glossary/js/export.js - 엑셀/CSV 내보내기/가져오기 (기존 유지 + Supabase 호환)
-import { parseCSV, normalizeTerm } from './loader.js';
+// glossary/js/export.js - 엑셀/CSV 내보내기/가져오기 (Supabase 호환, 소문자 파일명)
+import { parseCSV, normalizeTerm as importedNormalize } from './loader.js';
+
+// fallback normalizeTerm if import fails (안전장치)
+function fallbackNormalize(t) {
+  const longDesc = (t.longDesc || t.longdesc || '').trim();
+  const defaultFav = (t.defaultFav || t.defaultfav || '').toString().trim();
+  return {
+    id: (t.id||'').trim(),
+    term: (t.term||'').trim(),
+    fullname: (t.fullname||'').trim(),
+    meaning: (t.meaning||'').trim(),
+    example: (t.example||'').trim(),
+    category: (t.category||'Etc').trim() || 'Etc',
+    longDesc, longdesc: longDesc,
+    defaultFav, defaultfav: defaultFav
+  };
+}
+const normalizeTerm = importedNormalize || fallbackNormalize;
 
 export function generateCSVFromTerms(terms) {
   const headers = ['id','term','fullname','meaning','example','category','longDesc','defaultFav'];
@@ -35,7 +52,7 @@ export async function exportAllTerms(terms) {
 
 export async function exportFavorites(allTerms, favSet) {
   const xlsx = await import('xlsx');
-  const favs = allTerms.filter(t => favSet.has(t.id));
+  const favs = allTerms.filter(t => favSet.has(t.term || t.id));
   const ws = xlsx.utils.json_to_sheet(favs);
   const wb = xlsx.utils.book_new();
   xlsx.utils.book_append_sheet(wb, ws, 'favorites');
@@ -62,7 +79,6 @@ export async function importFromExcel(file) {
       defaultFav: lower.defaultfav || lower.defaultFav || ''
     });
   }).filter(t => t.term && t.meaning && t.category);
-  // id 중복 체크
   const seen = new Set();
   for (const t of terms) {
     if (!t.id) t.id = t.term.toLowerCase().replace(/[^a-z0-9-]+/g,'-');
@@ -71,3 +87,5 @@ export async function importFromExcel(file) {
   }
   return terms;
 }
+
+export { parseCSV };

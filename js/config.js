@@ -31,6 +31,12 @@ export const CATEGORY_COLORS = {
   'Language': '#ec4899'
 };
 
+export const CATEGORIES = [
+  '데이터베이스·SQL','개발 기본','프론트엔드','백엔드','AI·ML','클라우드·DevOps',
+  '보안','네트워크','데이터·분석','모바일','언어·프레임워크','CS 기본','Etc',
+  'AI/ML','Backend','Frontend','Data','DevOps','Security','Mobile','Cloud','Database','Network','Language'
+];
+
 export const TOP30 = [
   'CRUD','REST','API','MVC','SQL','NoSQL','JWT','OAuth','ORM','CI/CD',
   'Docker','Kubernetes','Git','HTTP','HTTPS','TCP/IP','DNS','CDN',
@@ -38,13 +44,15 @@ export const TOP30 = [
   'React','Node.js','TypeScript','GraphQL'
 ];
 
-export const INITIAL_TERM = null; // loader에서 CRUD 또는 첫 번째 용어로 자동 설정
+export const INITIAL_TERM = null;
 
 export function getCategoryColor(cat) {
-  return CATEGORY_COLORS[cat] || CATEGORY_COLORS['개발 기본'];
+  return CATEGORY_COLORS[cat] || CATEGORY_COLORS['개발 기본'] || '#111827';
 }
 
 export const LOCAL_STORAGE_KEYS = {
   favorites: 'it-ai-glossary:favorites:v1',
   theme: 'it-ai-glossary:theme'
 };
+
+export function getCategoryList() { return CATEGORIES; }

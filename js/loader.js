@@ -2,7 +2,7 @@
 import { supabase } from './supabase.js';
 import { CSV_PATH } from './config.js';
 
-function parseCSVLine(line) {
+export function parseCSVLine(line) {
   const cols = [];
   let cur = '', inQ = false;
   for (let i=0;i<line.length;i++) {
@@ -17,7 +17,7 @@ function parseCSVLine(line) {
   return cols;
 }
 
-function parseCSV(text) {
+export function parseCSV(text) {
   const lines = text.trim().split('\n');
   if (lines.length < 2) return [];
   const headers = parseCSVLine(lines[0]).map(h=>h.trim().replace(/^"|"$/g,'').toLowerCase());
@@ -53,7 +53,7 @@ function parseCSV(text) {
   return out;
 }
 
-function normalizeTerm(t) {
+export function normalizeTerm(t) {
   const longDesc = (t.longDesc || t.longdesc || '').trim();
   const defaultFav = (t.defaultFav || t.defaultfav || '').toString().trim();
   return {
@@ -113,7 +113,6 @@ export async function loadTerms() {
   try {
     if (source==='supabase') {
       supabase.channel('terms-changes-ui').on('postgres_changes', { event: '*', schema: 'public', table: 'terms' }, () => {
-        // 페이지 새로고침 없이도 다음 로드 시 반영되도록 이벤트만 발송
         window.dispatchEvent(new CustomEvent('glossary:terms-updated'));
       }).subscribe();
     }
