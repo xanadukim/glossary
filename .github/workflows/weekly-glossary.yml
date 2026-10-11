@@ -21,15 +21,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22 (WebSocket native support)
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
-      - name: Install dependencies
+      - name: Install dependencies (with ws polyfill for Supabase)
         run: |
           npm init -y
-          npm install @supabase/supabase-js
+          npm install @supabase/supabase-js@2.39.0 ws
+
+      - name: Check Secrets (보안 - 값은 표시 안 함)
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ]; then
+            echo "❌ SUPABASE_URL Secret이 없습니다. Settings > Secrets and variables > Actions에서 등록하세요."
+            exit 1
+          else
+            echo "✅ SUPABASE_URL Secret 존재 확인"
+          fi
+          if [ -z "${{ secrets.SUPABASE_SERVICE_KEY }}" ]; then
+            echo "❌ SUPABASE_SERVICE_KEY Secret이 없습니다. Supabase Dashboard > Project Settings > API > service_role 키를 등록하세요."
+            exit 1
+          else
+            echo "✅ SUPABASE_SERVICE_KEY Secret 존재 확인"
+          fi
 
       - name: Generate pending terms with dual verification
         env:
