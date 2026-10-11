@@ -1,70 +1,245 @@
-
+// glossary/js/app.js - Modern, no duplicate content
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { CATEGORY_COLORS, TOP30, INITIAL_TERM } from './config.js';
 import { loadTerms } from './loader.js';
-import { Header, Tabs, LeftSidebar, DetailView, RightSidebar, CategoryGridView, Top30View, FavoritesView } from './components.js';
+import { getCategoryColor, TOP30, LOCAL_STORAGE_KEYS } from './config.js';
+import { Header, CommandPalette, LeftNav, TermDetail, MainLayout } from './components.js';
+
+const h = React.createElement;
+
 function App() {
-  const [isDark, setIsDark] = useState(false);
-  const [selectedTerm, setSelectedTermState] = useState(INITIAL_TERM);
-  const [selectedCategories, setSelectedCategories] = useState(new Set(['데이터베이스·SQL']));
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [activeTab, setActiveTab] = useState('all');
-  const [favorites, setFavorites] = useState(new Set());
-  const [isMobileOpen, setMobileOpen] = useState(false);
-  const [copyState, setCopyState] = useState(null);
-  const [toast, setToast] = useState('');
-  const [categories, setCategories] = useState([]);
   const [allTerms, setAllTerms] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [selectedTerm, setSelectedTerm] = useState(null);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [activeFilter, setActiveFilter] = useState(null); // null, 'top30', 'favorites'
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isCommandOpen, setIsCommandOpen] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [isDark, setIsDark] = useState(false);
+  const [favorites, setFavorites] = useState(new Set());
   const searchRef = useRef(null);
-  useEffect(()=>{ setIsDark(window.matchMedia('(prefers-color-scheme: dark)').matches); },[]);
-  useEffect(()=>{ if(isDark) document.documentElement.classList.add('dark'); else document.documentElement.classList.remove('dark'); },[isDark]);
-  useEffect(()=>{ const h=setTimeout(()=>setDebouncedQuery(searchQuery.trim()),200); return()=>clearTimeout(h); },[searchQuery]);
-  useEffect(()=>{ if(toast){ const t=setTimeout(()=>setToast(''),1500); return()=>clearTimeout(t);} },[toast]);
+
+  // Load terms
   useEffect(()=>{
-    const saved = (()=>{ try { return JSON.parse(localStorage.getItem('it-ai-glossary:favorites:v1')||'[]'); } catch { return null; } })();
-    loadTerms().then(({categories, allTerms})=>{
-      setCategories(categories);
-      setAllTerms(allTerms);
-      const crud=allTerms.find(t=>t.term==='CRUD')||allTerms[0];
-      if(crud) setSelectedTermState(crud);
-      if(!saved || saved.length===0){
+    (async()=>{
+      const { allTerms: loaded, categories: cats } = await loadTerms();
+      setAllTerms(loaded);
+      setCategories(cats);
+      // Default select first term or from hash
+      const hash = window.location.hash.replace('#','');
+      const fromHash = hash ? loaded.find(t=>t.id===hash) : null;
+      if (fromHash) setSelectedTerm(fromHash);
+      else if (loaded.length>0) setSelectedTerm(loaded[0]);
+    })();
+  }, []);
+
+  // Favorites from localStorage
+  useEffect(()=>{
+    try {
+      const saved = localStorage.getItem(LOCAL_STORAGE_KEYS.favorites);
+      if (saved) setFavorites(new Set(JSON.parse(saved)));
+      else {
+        // Default favs from isDefaultFav
         const defaults = allTerms.filter(t=>t.isDefaultFav).map(t=>t.term);
-        if(defaults.length>0) setFavorites(new Set(defaults));
-      } else {
-        setFavorites(new Set(saved));
+        if (defaults.length>0) {
+          const set = new Set(defaults);
+          setFavorites(set);
+          localStorage.setItem(LOCAL_STORAGE_KEYS.favorites, JSON.stringify([...set]));
+        }
       }
-    }).catch(()=>setToast('terms.csv 로드 실패'));
-  },[]);
-  useEffect(()=>{ try { localStorage.setItem('it-ai-glossary:favorites:v1', JSON.stringify(Array.from(favorites))); } catch {} },[favorites]);
-  const searchResults = useMemo(()=>{ if(!debouncedQuery) return []; const q=debouncedQuery.toLowerCase(); return allTerms.filter(t=> t.term.toLowerCase().includes(q) || t.fullname.toLowerCase().includes(q) || t.meaning.toLowerCase().includes(q) || t.example.toLowerCase().includes(q) || (t.longDesc||'').toLowerCase().includes(q)).slice(0,80); },[debouncedQuery, allTerms]);
-  const related = useMemo(()=>{ const cat=categories.find(c=>c.name===selectedTerm?.category); if(!cat) return []; return cat.terms.filter(t=>t.term!==selectedTerm?.term).slice(0,4); },[selectedTerm, categories]);
-  const getColor = (catName)=> CATEGORY_COLORS[catName] || CATEGORY_COLORS['개발 기본'];
-  const toggleTheme = ()=> setIsDark(v=>!v);
-  const onSelectTerm = (term)=>{ setSelectedTermState(term); setMobileOpen(false); setActiveTab('all'); window.scrollTo({top:0, behavior:'smooth'}); };
-  const toggleCategory = (cat)=>{ setSelectedCategories(prev=>{ const next=new Set(prev); if(next.has(cat)) next.delete(cat); else next.add(cat); return next; }); };
-  const onSelectCategory = (catName)=>{ setSelectedCategories(new Set([catName])); setActiveTab('all'); };
-  const toggleFavorite = (termStr)=>{ setFavorites(prev=>{ const next=new Set(prev); if(next.has(termStr)) next.delete(termStr); else next.add(termStr); return next; }); };
-  return React.createElement('div', { className: 'min-h-screen bg-[var(--bg)] text-[var(--text)] antialiased' },
-    React.createElement(Header, { searchQuery, setSearchQuery, debouncedQuery, searchResults, onSelectTerm, totalTerms: allTerms.length||447, totalCategories: categories.length||12, isDark, toggleTheme, setMobileOpen, searchRef }),
-    React.createElement(Tabs, { activeTab, setActiveTab, favoritesCount: favorites.size }),
-    toast && React.createElement('div', { className: 'fixed top-[120px] left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 rounded-full bg-black text-white dark:bg-white dark:text-black text-[12px]' }, toast),
-    React.createElement('div', { className: 'mx-auto max-w-[1680px] px-0 md:px-6 lg:px-8 flex items-start' },
-      React.createElement(LeftSidebar, { categories, selectedCategories, toggleCategory, selectedTerm, onSelectTerm, searchActive: !!debouncedQuery, searchResults, isMobileOpen, setMobileOpen, getColor }),
-      React.createElement('main', { className: 'flex-1 min-w-0 px-4 md:px-6 lg:px-8 py-5 md:py-7' },
-        activeTab==='category' ? React.createElement(CategoryGridView, { categories, onSelectCategory, getColor }) :
-        activeTab==='top30' ? React.createElement(Top30View, { top30: TOP30, allTerms, onSelectTerm }) :
-        activeTab==='favorites' ? React.createElement(FavoritesView, { favorites, allTerms, onSelectTerm, onToggleFav: toggleFavorite }) :
-        React.createElement(React.Fragment, null,
-          React.createElement(DetailView, { term: selectedTerm, favorites, toggleFavorite, getColor, onSelectTerm, searchRef, copyState, setCopyState }),
-          React.createElement('div', { className: 'mt-6 xl:hidden' }, React.createElement(RightSidebar, { related, top30: TOP30, allTerms, selected: selectedTerm, onSelect: onSelectTerm, favorites, onToggleFav: toggleFavorite }))
+    } catch {}
+  }, [allTerms]);
+
+  useEffect(()=>{
+    try { localStorage.setItem(LOCAL_STORAGE_KEYS.favorites, JSON.stringify([...favorites])); } catch {}
+  }, [favorites]);
+
+  // Theme
+  useEffect(()=>{
+    const saved = localStorage.getItem(LOCAL_STORAGE_KEYS.theme);
+    const dark = saved ? saved==='dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    setIsDark(dark);
+    document.documentElement.classList.toggle('dark', dark);
+  }, []);
+  const toggleTheme = ()=>{
+    const next = !isDark;
+    setIsDark(next);
+    document.documentElement.classList.toggle('dark', next);
+    localStorage.setItem(LOCAL_STORAGE_KEYS.theme, next?'dark':'light');
+  };
+
+  // Command palette keyboard
+  useEffect(()=>{
+    const onKey = (e)=>{
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase()==='k') {
+        e.preventDefault();
+        setIsCommandOpen(v=>!v);
+      }
+      if (e.key==='Escape' && isCommandOpen) setIsCommandOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return ()=>window.removeEventListener('keydown', onKey);
+  }, [isCommandOpen]);
+
+  // Hash navigation
+  useEffect(()=>{
+    if (selectedTerm) {
+      history.replaceState(null, '', '#' + selectedTerm.id);
+    }
+  }, [selectedTerm]);
+
+  // Search filtering for center list
+  const searchResults = useMemo(()=>{
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    return allTerms.filter(t=> t.term.toLowerCase().includes(q) || t.meaning.toLowerCase().includes(q) || t.category.toLowerCase().includes(q)).slice(0, 20);
+  }, [searchQuery, allTerms]);
+
+  const onSelectTerm = (t)=>{
+    setSelectedTerm(t);
+    setIsMobileOpen(false);
+    setIsCommandOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const onToggleFav = (termName)=>{
+    setFavorites(prev=>{
+      const next = new Set(prev);
+      if (next.has(termName)) next.delete(termName);
+      else next.add(termName);
+      return next;
+    });
+  };
+
+  const setFilter = (filter)=>{
+    // filter: null, 'top30', 'favorites', or category name
+    if (filter===null) { setActiveFilter(null); setSelectedCategory(null); }
+    else if (filter==='top30' || filter==='favorites') { setActiveFilter(filter); setSelectedCategory(null); }
+    else { setSelectedCategory(filter); setActiveFilter(null); }
+    setIsMobileOpen(false);
+  };
+
+  // For left nav term list, when search active show search results only in center, not duplicate in left
+  const isSearchActive = searchQuery.trim().length>0;
+
+  return h('div', { className: 'min-h-screen', style: { background: 'var(--bg)' } },
+    h(Header, {
+      searchQuery,
+      setSearchQuery,
+      onOpenCommand: ()=>setIsCommandOpen(true),
+      totalTerms: allTerms.length,
+      totalCategories: categories.length,
+      isDark,
+      toggleTheme,
+      setMobileOpen: setIsMobileOpen,
+      searchRef
+    }),
+    h(CommandPalette, {
+      isOpen: isCommandOpen,
+      onClose: ()=>setIsCommandOpen(false),
+      searchQuery,
+      setSearchQuery,
+      allTerms,
+      categories,
+      onSelectTerm,
+      setFilter,
+      favorites
+    }),
+    h(MainLayout, null,
+      h('div', { className: 'flex flex-col lg:flex-row gap-8 lg:gap-10' },
+        // Left - hidden on mobile unless open
+        h('div', { className: `${isMobileOpen ? 'fixed inset-0 z-40 p-4 pt-[72px] bg-[var(--bg)] overflow-y-auto lg:static lg:p-0 lg:bg-transparent lg:overflow-visible' : 'hidden lg:block'} lg:w-[300px] shrink-0` },
+          isMobileOpen && h('button', { onClick: ()=>setIsMobileOpen(false), className: 'lg:hidden mb-4 h-9 px-4 rounded-full border text-[13px]', style: { background: 'var(--surface)', borderColor: 'var(--border)' } }, '✕ 닫기'),
+          h(LeftNav, {
+            categories,
+            selectedCategory,
+            setSelectedCategory: (cat)=>{ setSelectedCategory(cat); setActiveFilter(null); },
+            activeFilter,
+            setActiveFilter: (f)=>{ setActiveFilter(f); if(f) setSelectedCategory(null); },
+            selectedTerm,
+            onSelectTerm,
+            allTerms: isSearchActive ? searchResults : allTerms,
+            favorites,
+            totalTerms: allTerms.length,
+            getColor: getCategoryColor
+          })
+        ),
+        // Center - single source, no duplicate lists
+        h('div', { className: 'flex-1 min-w-0' },
+          isSearchActive ?
+            h('div', { className: 'space-y-4 animate-in' },
+              h('div', { className: 'flex items-center justify-between' },
+                h('h2', { className: 'text-[20px] font-bold' }, `검색 결과 ${searchResults.length}개`),
+                h('button', { onClick: ()=>setSearchQuery(''), className: 'text-[12px] px-3 py-1.5 rounded-full border', style: { background: 'var(--surface)', borderColor: 'var(--border)' } }, '검색 초기화')
+              ),
+              h('div', { className: 'grid md:grid-cols-2 gap-3' },
+                searchResults.map(t=> h('button', { key: t.id, onClick: ()=>onSelectTerm(t), className: 'text-left p-4 rounded-[16px] border hover:shadow-sm transition-all text-left', style: { background: 'var(--surface)', borderColor: 'var(--border)' } },
+                  h('div', { className: 'flex items-center gap-2 mb-1' },
+                    h('span', { className: 'h-2 w-2 rounded-full', style: { background: getCategoryColor(t.category) } }),
+                    h('span', { className: 'text-[11px]', style: { color: 'var(--text-3)' } }, t.category)
+                  ),
+                  h('div', { className: 'font-bold text-[14px]' }, t.term),
+                  h('div', { className: 'text-[12px] mt-1 line-clamp-2', style: { color: 'var(--text-2)' } }, t.meaning)
+                ))
+              )
+            )
+          :
+          activeFilter==='top30' ?
+            h('div', { className: 'space-y-4 animate-in' },
+              h('div', null,
+                h('h2', { className: 'text-[28px] font-extrabold tracking-tight' }, 'TOP 30'),
+                h('div', { className: 'text-[13px] mt-1', style: { color: 'var(--text-2)' } }, '가장 중요한 핵심 용어 30개')
+              ),
+              h('div', { className: 'grid md:grid-cols-2 gap-3' },
+                TOP30.map((name, idx)=>{
+                  const t = allTerms.find(x=>x.term===name || x.id===name);
+                  if (!t) return null;
+                  return h('button', { key: t.id, onClick: ()=>onSelectTerm(t), className: 'text-left p-4 rounded-[16px] border hover:shadow-sm flex gap-3 transition-all', style: { background: 'var(--surface)', borderColor: 'var(--border)' } },
+                    h('span', { className: 'text-[11px] font-bold mt-1', style: { color: 'var(--text-3)' } }, `${idx+1}`),
+                    h('div', null,
+                      h('div', { className: 'font-bold text-[14px]' }, t.term),
+                      h('div', { className: 'text-[11px] mb-1', style: { color: 'var(--text-3)' } }, t.category),
+                      h('div', { className: 'text-[12px] line-clamp-2', style: { color: 'var(--text-2)' } }, t.meaning)
+                    )
+                  );
+                })
+              )
+            )
+          :
+          activeFilter==='favorites' ?
+            h('div', { className: 'space-y-4 animate-in' },
+              h('div', null,
+                h('h2', { className: 'text-[28px] font-extrabold tracking-tight' }, `즐겨찾기 ${favorites.size}개`),
+                h('div', { className: 'text-[13px] mt-1', style: { color: 'var(--text-2)' } }, '내가 저장한 용어 모음')
+              ),
+              favorites.size===0 ? h('div', { className: 'py-20 text-center rounded-[16px] border border-dashed', style: { borderColor: 'var(--border)', color: 'var(--text-3)' } }, h('div', { className: 'text-[13px]' }, '즐겨찾기가 없습니다'), h('div', { className: 'text-[11px] mt-1' }, '용어 상세에서 ★를 눌러보세요')) :
+              h('div', { className: 'grid md:grid-cols-2 gap-3' },
+                Array.from(favorites).map(name=>{
+                  const t = allTerms.find(x=>x.term===name);
+                  if (!t) return null;
+                  return h('div', { key: t.id, className: 'p-4 rounded-[16px] border flex justify-between gap-3', style: { background: 'var(--surface)', borderColor: 'var(--border)' } },
+                    h('button', { onClick: ()=>onSelectTerm(t), className: 'text-left flex-1' },
+                      h('div', { className: 'font-bold text-[14px]' }, t.term),
+                      h('div', { className: 'text-[11px]', style: { color: 'var(--text-3)' } }, t.category),
+                      h('div', { className: 'text-[12px] mt-1 line-clamp-2', style: { color: 'var(--text-2)' } }, t.meaning)
+                    ),
+                    h('button', { onClick: ()=>onToggleFav(t.term), className: 'h-8 w-8 rounded-full bg-black text-white dark:bg-white dark:text-black grid place-items-center shrink-0' }, '★')
+                  );
+                })
+              )
+            )
+          :
+            h(TermDetail, { term: selectedTerm, allTerms, favorites, onToggleFav, onSelectTerm, getColor: getCategoryColor })
         )
-      ),
-      activeTab==='all' && React.createElement('aside', { className: 'hidden xl:block w-[320px] shrink-0 sticky top-[108px] h-[calc(100dvh-108px)] overflow-y-auto py-7 pl-0 pr-2' }, React.createElement(RightSidebar, { related, top30: TOP30, allTerms, selected: selectedTerm, onSelect: onSelectTerm, favorites, onToggleFav: toggleFavorite }))
+      )
     ),
-    React.createElement('footer', { className: 'mx-auto max-w-[1680px] px-4 md:px-8 py-10 text-[11px] text-[var(--text-3)] border-t mt-8 flex justify-between' }, React.createElement('span', null, '© IT·AI 용어 사전 · 예시 포맷 기반 대시보드 · CRUD 기본 선택 · ', React.createElement('a', { href: './admin.html', className: 'underline hover:text-[var(--text)]' }, '관리자')), React.createElement('span', { className: 'mono' }, 'BUILT WITH REACT + TAILWIND'))
+    // Mobile bottom bar for quick search
+    h('div', { className: 'lg:hidden fixed bottom-4 left-4 right-4 z-20' },
+      h('button', { onClick: ()=>setIsCommandOpen(true), className: 'w-full h-12 rounded-full border shadow-lg flex items-center justify-center gap-2 font-medium text-[14px]', style: { background: 'var(--surface)', borderColor: 'var(--border)' } }, '🔍 검색 (⌘K)')
+    )
   );
 }
+
 const root = createRoot(document.getElementById('root'));
-root.render(React.createElement(App));
+root.render(h(App));
