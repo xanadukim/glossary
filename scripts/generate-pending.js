@@ -1,6 +1,14 @@
-// scripts/generate-pending.js - Tier3 주 1회 자동 제안 + 2중 출처 검증
-// Node.js 20, ESM 아님 CommonJS로 실행
+// scripts/generate-pending.js - Tier3 주 1회 자동 제안 + 2중 출처 검증 (Node 22 대응 + ws polyfill)
 const { createClient } = require('@supabase/supabase-js');
+
+// Node 20 이하에서 WebSocket polyfill 필요 - Supabase Realtime을 위해 ws 사용
+try {
+  const ws = require('ws');
+  global.WebSocket = ws;
+} catch (e) {
+  // Node 22+에서는 native WebSocket이 있으므로 무시
+  console.log('ws polyfill not needed (Node 22+ native WebSocket)');
+}
 
 // 후보 풀 - 카테고리별 30개씩, 기존 445개와 겹치지 않도록 최신 기술 위주
 const CANDIDATE_POOL = {
@@ -36,11 +44,9 @@ async function fetchWithTimeout(url, timeout=5000) {
   }
 }
 
-// 2중 출처 검증
 async function dualVerify(term) {
   const results = { source1_url: null, source2_url: null, source1_title: null, source2_title: null, match_score: 0, verified: false };
   try {
-    // Source 1: Wikipedia REST API
     const wikiUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(term)}`;
     const wikiData = await fetchWithTimeout(wikiUrl, 6000).catch(()=>null);
     if (wikiData && wikiData.title && !wikiData.title.includes('Not found')) {
@@ -50,7 +56,6 @@ async function dualVerify(term) {
     }
   } catch {}
   try {
-    // Source 2: DuckDuckGo Instant Answer
     const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(term + ' programming')}&format=json&no_html=1&skip_disambig=1`;
     const ddgData = await fetchWithTimeout(ddgUrl, 6000).catch(()=>null);
     if (ddgData && (ddgData.AbstractText || ddgData.Results?.length>0)) {
@@ -59,7 +64,6 @@ async function dualVerify(term) {
       results.match_score += 30;
       if (ddgData.AbstractText && ddgData.AbstractText.length>20) results.match_score += 20;
     } else {
-      // Fallback: GitHub search URL as second source
       results.source2_url = `https://github.com/search?q=${encodeURIComponent(term)}&type=repositories`;
       results.source2_title = `${term} - GitHub Search`;
       results.match_score += 30;
@@ -69,12 +73,10 @@ async function dualVerify(term) {
     results.source2_title = `${term} - Web Search`;
     results.match_score += 20;
   }
-  // 최소 50점 이상이면 검증 통과로 간주
   results.verified = results.match_score >= 50;
   return results;
 }
 
-// 간단한 정의 생성 (실제로는 LLM이 필요하지만 MVP는 템플릿 기반)
 function generateDefinition(term, category) {
   const templates = {
     '프론트엔드': `${term}은(는) 최신 프론트엔드 개발에서 사용되는 도구/프레임워크입니다. 성능과 개발자 경험을 개선하기 위해 설계되었습니다.`,
@@ -105,9 +107,11 @@ async function main() {
     console.error('SUPABASE_URL과 SUPABASE_SERVICE_KEY 환경변수가 필요합니다. GitHub Secrets에 등록하세요.');
     process.exit(1);
   }
-  const supabase = createClient(url, serviceKey);
+  // createClient with realtime disabled to avoid WebSocket issue, but we also have ws polyfill
+  const supabase = createClient(url, serviceKey, {
+    realtime: { transport: global.WebSocket }
+  });
 
-  // 설정 읽기
   let settings = null;
   try {
     const { data, error } = await supabase.from('automation_settings').select('*').order('created_at', { ascending: false }).limit(1).single();
@@ -134,7 +138,6 @@ async function main() {
     targetCategories = settings.selected_categories;
     console.log(`설정된 카테고리 사용: ${targetCategories.join(', ')}`);
   } else {
-    // 자동 제안 모드: 기존 terms에서 카테고리별 개수 분석, 가장 적은 카테고리 선택
     console.log('자동 제안 모드 (null) - 부족한 카테고리 분석');
     const { data: allTerms } = await supabase.from('terms').select('category');
     const counts = {};
@@ -142,14 +145,13 @@ async function main() {
     const sorted = Object.entries(counts).sort((a,b)=>a[1]-b[1]);
     console.log('카테고리별 개수:', counts);
     if (sorted.length>0) {
-      targetCategories = [sorted[0][0]]; // 가장 적은 카테고리 1개
+      targetCategories = [sorted[0][0]];
       console.log(`가장 부족한 카테고리 자동 선택: ${targetCategories[0]} (${sorted[0][1]}개)`);
     } else {
       targetCategories = ['프론트엔드'];
     }
   }
 
-  // 기존 id 수집 (중복 방지)
   const { data: existingTerms } = await supabase.from('terms').select('id,term');
   const { data: existingPending } = await supabase.from('terms_pending').select('id,term');
   const existingIds = new Set([...(existingTerms||[]).map(t=>t.id.toLowerCase()), ...(existingPending||[]).map(t=>t.id.toLowerCase())]);
@@ -160,7 +162,6 @@ async function main() {
 
   for (const cat of targetCategories) {
     const pool = CANDIDATE_POOL[cat] || CANDIDATE_POOL['개발 기본'];
-    // 셔플
     const shuffled = [...pool].sort(()=>0.5-Math.random());
     for (const termName of shuffled) {
       if (generated.length >= inputCount) break;
@@ -195,7 +196,6 @@ async function main() {
       existingIds.add(id);
       existingTermsLower.add(termName.toLowerCase());
       
-      // Rate limit 방지: 1초 대기
       await new Promise(r=>setTimeout(r, 1000));
     }
     if (generated.length >= inputCount) break;
@@ -208,7 +208,6 @@ async function main() {
     return;
   }
 
-  // terms_pending에 INSERT
   const insertData = generated.map(g=>({
     id: g.id,
     term: g.term,
@@ -230,7 +229,6 @@ async function main() {
 
   console.log(`terms_pending에 ${inserted.length}개 INSERT 성공:`, inserted.map(t=>t.id));
 
-  // 로그 기록
   await supabase.from('automation_logs').insert({
     categories: targetCategories,
     generated_count: generated.length,
@@ -239,7 +237,6 @@ async function main() {
     triggered_by: process.env.INPUT_CATEGORIES ? 'manual' : 'schedule'
   });
 
-  // settings last_run_at 업데이트
   if (settings?.id) {
     await supabase.from('automation_settings').update({ last_run_at: new Date().toISOString() }).eq('id', settings.id);
   }
