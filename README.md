@@ -27,5 +27,4 @@
 ## 배포
 glossary/ 폴더 전체를 GitHub repo 루트에 업로드. terms.csv는 백업용으로 유지.
 
-## Publishable key
-sb_publishable_5fLBN1VzY0Th2p3Leq4fuA_9UFP78fl (공개 키, RLS로 보호)
+
