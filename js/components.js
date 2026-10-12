@@ -1,4 +1,4 @@
-// glossary/js/components.js - v4: right-aligned filters+search, categories below Top
+// glossary/js/components.js - v5: right-aligned filters+search + 보고서 button next to 즐겨찾기
 import React from 'react';
 const h = React.createElement;
 
@@ -10,7 +10,6 @@ export function Header({ searchQuery, setSearchQuery, onOpenCommand, totalTerms,
   ];
   return h('header', { className: 'sticky top-0 z-30 border-b backdrop-blur-2xl', style: { background: 'color-mix(in srgb, var(--surface) 94%, transparent)', borderColor: 'var(--border)' } },
     h('div', { className: 'mx-auto max-w-[1680px] px-4 md:px-6 h-[56px] flex items-center justify-between gap-3' },
-      // Left: logo
       h('div', { className: 'flex items-center gap-2.5 shrink-0' },
         h('button', { onClick: ()=>setMobileOpen(v=>!v), className: 'lg:hidden h-8 w-8 rounded-full border grid place-items-center text-[12px]', style: { background: 'var(--surface-2)', borderColor: 'var(--border)' } }, '☰'),
         h('div', { className: 'h-8 w-8 rounded-[10px] bg-black text-white dark:bg-white dark:text-black grid place-items-center font-bold text-[12px]' }, 'IT'),
@@ -19,19 +18,28 @@ export function Header({ searchQuery, setSearchQuery, onOpenCommand, totalTerms,
           h('div', { className: 'text-[10px] mt-0.5', style: { color: 'var(--text-3)' } }, `${totalTerms}개`)
         )
       ),
-      // Right aligned: filters + search + actions
       h('div', { className: 'flex items-center gap-2 md:gap-2.5 ml-auto' },
         h('div', { className: 'hidden md:flex items-center gap-1' },
-          filters.map(f=>{
-            const isAll = f.id===null && !activeFilter && !selectedCategory;
-            const isActive = f.id===null ? isAll : activeFilter===f.id && !selectedCategory;
-            return h('button', {
-              key: String(f.id),
-              onClick: ()=> setFilter(f.id),
-              className: `h-8 px-3.5 rounded-full border text-[12px] font-medium transition-all ${isActive ? 'bg-black text-white dark:bg-white dark:text-black border-black shadow-sm' : 'hover:bg-[var(--surface-2)]'}`,
-              style: isActive ? {} : { background: 'var(--surface)', borderColor: 'var(--border)' }
-            }, f.label);
-          })
+          [
+            ...filters.map(f=>{
+              const isAll = f.id===null && !activeFilter && !selectedCategory;
+              const isActive = f.id===null ? isAll : activeFilter===f.id && !selectedCategory;
+              return h('button', {
+                key: String(f.id),
+                onClick: ()=> setFilter(f.id),
+                className: `h-8 px-3.5 rounded-full border text-[12px] font-medium transition-all ${isActive ? 'bg-black text-white dark:bg-white dark:text-black border-black shadow-sm' : 'hover:bg-[var(--surface-2)]'}`,
+                style: isActive ? {} : { background: 'var(--surface)', borderColor: 'var(--border)' }
+              }, f.label);
+            }),
+            h('a', {
+              key: 'report',
+              href: './It-Ai.html',
+              target: '_blank',
+              rel: 'noopener noreferrer',
+              className: 'h-8 px-3.5 rounded-full border text-[12px] font-medium grid place-items-center transition-all hover:shadow-sm bg-white',
+              style: { background: 'var(--surface)', borderColor: 'var(--border)' }
+            }, '📄 보고서')
+          ]
         ),
         h('button', {
           onClick: onOpenCommand,
@@ -48,21 +56,30 @@ export function Header({ searchQuery, setSearchQuery, onOpenCommand, totalTerms,
       )
     ),
     h('div', { className: 'md:hidden px-4 pb-2 flex gap-1 overflow-x-auto' },
-      filters.map(f=>{
-        const isAll = f.id===null && !activeFilter && !selectedCategory;
-        const isActive = f.id===null ? isAll : activeFilter===f.id && !selectedCategory;
-        return h('button', {
-          key: String(f.id),
-          onClick: ()=> setFilter(f.id),
-          className: `h-7 px-3 rounded-full border text-[11px] font-medium whitespace-nowrap ${isActive ? 'bg-black text-white border-black' : ''}`,
-          style: isActive ? {} : { background: 'var(--surface)', borderColor: 'var(--border)' }
-        }, f.label);
-      })
+      [
+        ...filters.map(f=>{
+          const isAll = f.id===null && !activeFilter && !selectedCategory;
+          const isActive = f.id===null ? isAll : activeFilter===f.id && !selectedCategory;
+          return h('button', {
+            key: String(f.id),
+            onClick: ()=> setFilter(f.id),
+            className: `h-7 px-3 rounded-full border text-[11px] font-medium whitespace-nowrap ${isActive ? 'bg-black text-white border-black' : ''}`,
+            style: isActive ? {} : { background: 'var(--surface)', borderColor: 'var(--border)' }
+          }, f.label);
+        }),
+        h('a', {
+          key: 'report-m',
+          href: './It-Ai.html',
+          target: '_blank',
+          rel: 'noopener noreferrer',
+          className: 'h-7 px-3 rounded-full border text-[11px] font-medium whitespace-nowrap grid place-items-center',
+          style: { background: 'var(--surface)', borderColor: 'var(--border)' }
+        }, '📄 보고서')
+      ]
     )
   );
 }
 
-// NEW: Category bar below Top (as requested)
 export function CategoryBar({ categories, selectedCategory, activeFilter, searchQuery, setFilter, getColor }) {
   const sorted = [...categories].sort((a,b)=> b.count - a.count || a.name.localeCompare(b.name));
   return h('div', { className: 'sticky top-[56px] z-20 border-b backdrop-blur-xl', style: { background: 'color-mix(in srgb, var(--surface) 90%, transparent)', borderColor: 'var(--border)' } },
